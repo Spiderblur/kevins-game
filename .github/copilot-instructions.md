@@ -43,3 +43,5 @@
 - Add comments so I know what each part does.
 - Build features step by step.
 - Explain changes in kid-friendly language.
+
+## Remember this for my game
