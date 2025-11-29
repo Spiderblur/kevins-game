@@ -14,11 +14,13 @@ from hud import (
     draw_player_health_bar_topleft,
     draw_potion_icon,
 )
-from pig import spawn_pigs
+from pig import spawn_pigs, make_pig
 from world import get_door_rect, get_room3_table_rect, get_shopkeeper_rect
 
 DIALOGUE_BOX_PADDING = 10
 DIALOGUE_BUTTON_PADDING = 6
+EVIL_LINE = "Shopkeeper: \"Hey look over there! There's an evil creature right now!\""
+THANKS_LINE = "Shopkeeper: \"Wow. You saved my life! Here, take this.\""
 
 
 def start_dialogue(state: GameState, lines: List[str]):
@@ -26,6 +28,39 @@ def start_dialogue(state: GameState, lines: List[str]):
     state.dialogue_lines = list(lines)
     state.dialogue_index = 0
     state.dialogue_start_time = pygame.time.get_ticks() / 1000.0
+    state.resume_lines = list(lines)
+    state.resume_index = 0
+
+
+def restore_dialogue(state: GameState):
+    """Bring back dialogue if it was paused for the map."""
+    if state.resume_lines and not state.dialogue_lines:
+        state.dialogue_lines = list(state.resume_lines)
+        state.dialogue_index = max(0, state.resume_index)
+        state.dialogue_start_time = pygame.time.get_ticks() / 1000.0
+
+
+def spawn_evil_creature(state: GameState):
+    """Spawn a single pig-like enemy once when warned."""
+    if state.evil_spawned:
+        return
+    spawn_pos = pygame.Vector2(state.screen.get_width() * 0.75, state.screen.get_height() / 2)
+    state.pigs.append(make_pig(spawn_pos, is_evil=True))
+    state.evil_spawned = True
+
+
+def give_bow(state: GameState):
+    """Place a bow in the first empty inventory slot (once)."""
+    if state.bow_given:
+        return
+    for i, item in enumerate(state.inventory):
+        if item == "":
+            state.inventory[i] = "Bow"
+            state.bow_given = True
+            return
+    # If no empty slots, overwrite last slot
+    state.inventory[-1] = "Bow"
+    state.bow_given = True
 
 
 def current_dialogue_text(state: GameState):
@@ -60,21 +95,31 @@ def handle_dialogue_click(state: GameState):
         return
     if state.dialogue_index + 1 < len(state.dialogue_lines):
         state.dialogue_index += 1
+        state.resume_index = state.dialogue_index
         state.dialogue_start_time = now
     else:
         state.dialogue_lines = []
         state.dialogue_index = 0
         state.dialogue_start_time = 0.0
+        state.resume_lines = []
+        state.resume_index = 0
         # After map is tested, auto-advance to rumor lines once
-        if state.map_tested and state.shopkeeper_greeted and not state.rumor_shown:
-            state.rumor_shown = True
-            start_dialogue(
-                state,
-                [
-                    "Shopkeeper: \"Did you hear the rumor about the possessed creatures?\"",
-                    "Shopkeeper: \"Mladolr, the evil king, has been turning good creatures to bad...\"",
-                ],
-            )
+    if state.map_tested and state.shopkeeper_greeted and not state.rumor_shown:
+        state.rumor_shown = True
+        start_dialogue(
+            state,
+            [
+                "Shopkeeper: \"Did you hear the rumor about the possessed creatures?\"",
+                "Shopkeeper: \"Mladolr, the evil king, has been turning good creatures to bad...\"",
+                EVIL_LINE,
+            ],
+        )
+    # Spawn evil creature when reaching the warning line (once)
+    current = current_dialogue_text(state)
+    if current == EVIL_LINE and not state.evil_spawned:
+        spawn_evil_creature(state)
+    if current == THANKS_LINE:
+        give_bow(state)
 
 
 def draw_dialogue(state: GameState):
@@ -133,6 +178,11 @@ def reset_round(state: GameState):
     state.dialogue_start_time = 0.0
     state.map_tested = False
     state.rumor_shown = False
+    state.evil_spawned = False
+    state.evil_defeated = False
+    state.bow_given = False
+    state.resume_lines = []
+    state.resume_index = 0
 
     # Start near the shopkeeper/table to save time
     t_rect = get_room3_table_rect(state.screen, pygame.Vector2(0, 0))
@@ -201,6 +251,7 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                 state.running = False
             if event.type == pygame.KEYDOWN and event.key == pygame.K_m:
                 state.map_open = False
+                restore_dialogue(state)
         return
     for event in events:
         if event.type == pygame.QUIT:
@@ -215,12 +266,38 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                     state.shopkeeper_greeted = True
                     state.has_map = True
                     state.map_open = False
+                    if state.resume_lines and state.resume_index < len(state.resume_lines):
+                        # Resume where the player left off
+                        state.dialogue_lines = list(state.resume_lines)
+                        state.dialogue_index = state.resume_index
+                        state.dialogue_start_time = pygame.time.get_ticks() / 1000.0
+                        return
                     if not state.map_tested:
                         start_dialogue(
                             state,
                             [
                                 "Shopkeeper: \"You look new. Here's a free map!\"",
                                 "Shopkeeper: \"Why dont you try and use it?\"",
+                            ],
+                        )
+                    elif not state.rumor_shown:
+                        state.rumor_shown = True
+                        start_dialogue(
+                            state,
+                            [
+                                "Shopkeeper: \"Did you hear the rumor about the possessed creatures?\"",
+                                "Shopkeeper: \"Mladolr, the evil king, has been turning good creatures to bad...\"",
+                                EVIL_LINE,
+                            ],
+                        )
+                    elif not state.dialogue_lines and not state.resume_lines:
+                        # Replay only after finishing everything
+                        start_dialogue(
+                            state,
+                            [
+                                "Shopkeeper: \"Did you hear the rumor about the possessed creatures?\"",
+                                "Shopkeeper: \"Mladolr, the evil king, has been turning good creatures to bad...\"",
+                                EVIL_LINE,
                             ],
                         )
                     return
@@ -282,6 +359,17 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                 state.map_open = not state.map_open
                 if state.map_open:
                     state.map_tested = True
+                else:
+                    restore_dialogue(state)
+                    if state.map_tested and state.shopkeeper_greeted and not state.rumor_shown:
+                        state.rumor_shown = True
+                        start_dialogue(
+                            state,
+                            [
+                                "Shopkeeper: \"Did you hear the rumor about the possessed creatures?\"",
+                                "Shopkeeper: \"Mladolr, the evil king, has been turning good creatures to bad...\"",
+                            ],
+                        )
 
 
 def start_dodge(player):
@@ -422,6 +510,10 @@ def update_game(state: GameState):
                 if pig.health == 0 and not pig.coin_dropped:
                     state.coin_pickups.append({"pos": pig.pos.copy(), "value": settings.COIN_VALUE})
                     pig.coin_dropped = True
+                    if pig.is_evil and not state.evil_defeated:
+                        state.evil_defeated = True
+                        start_dialogue(state, [THANKS_LINE])
+                        give_bow(state)
 
         if state.level_index < 3:
             if state.pigs and not state.door_revealed and all(p.health <= 0 for p in state.pigs):

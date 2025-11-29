@@ -19,10 +19,11 @@ class PigState:
     knockback_vec: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
     coin_dropped: bool = False
     swing_base_dir: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(1, 0))
+    is_evil: bool = False
 
 
-def make_pig(pos: pygame.Vector2) -> PigState:
-    return PigState(pos=pygame.Vector2(pos))
+def make_pig(pos: pygame.Vector2, is_evil: bool = False) -> PigState:
+    return PigState(pos=pygame.Vector2(pos), is_evil=is_evil)
 
 
 def spawn_pigs(n: int, level_index: int, screen: pygame.Surface) -> List[PigState]:
