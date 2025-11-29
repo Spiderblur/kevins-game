@@ -21,6 +21,7 @@ In PowerShell:
 - Move: `W`, `A`, `S`, `D`
 - Swing sword: left mouse button
 - Block with shield: hold right mouse button (uses shield blocks)
+- Dodge: `F`
 - Drink heal potion: `Q` (takes one second to drink)
 - Open/close inventory: `T`
 - Use a speed potion: left click the potion in your inventory slots

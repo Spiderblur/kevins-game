@@ -155,7 +155,7 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                     break
         if event.type == pygame.KEYDOWN and event.key == pygame.K_t:
             state.inventory_open = not state.inventory_open
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_m:
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
             start_dodge(player)
 
 
