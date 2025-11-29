@@ -25,6 +25,7 @@ class PlayerState:
     potion_count: int = settings.START_POTION_COUNT
     knockback_timer: float = 0.0
     knockback_vec: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
+    armor_equipped: bool = False
 
 
 def create_player(start_pos: pygame.Vector2) -> PlayerState:

@@ -29,6 +29,7 @@ def reset_round(state: GameState):
     player.potion_count = settings.START_POTION_COUNT
     player.is_drinking_potion = False
     player.potion_timer = 0.0
+    player.armor_equipped = state.leather_armor_bought
     player.knockback_timer = 0.0
     player.knockback_vec.update(0, 0)
 
@@ -134,6 +135,7 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                 if near_rect.collidepoint(player.pos.x, player.pos.y) and state.coin_count >= settings.SPEED_POTION_COST:
                     state.coin_count -= settings.SPEED_POTION_COST
                     state.leather_armor_bought = True
+                    player.armor_equipped = True
         if state.inventory_open and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             mouse_x, mouse_y = event.pos
             slot_w, slot_h = 60, 60
@@ -301,7 +303,7 @@ def update_game(state: GameState):
                     if player.shield_blocks_left <= 0:
                         player.is_blocking = False
                 else:
-                    if state.leather_armor_bought:
+                    if state.leather_armor_bought or player.armor_equipped:
                         dmg_to_player = int(dmg_to_player * 0.95)
                     player.health = max(0, player.health - dmg_to_player)
                     pig.swing_timer = 0
@@ -442,6 +444,9 @@ def draw_game(state: GameState):
         pygame.draw.line(screen, (60, 0, 0), (int(p.x - 16), int(p.y + settings.PLAYER_RADIUS)), (int(p.x - 16 + leg_swing), int(p.y + leg_len)), 8)
         pygame.draw.line(screen, (60, 0, 0), (int(p.x + 16), int(p.y + settings.PLAYER_RADIUS)), (int(p.x + 16 - leg_swing), int(p.y + leg_len)), 8)
         pygame.draw.circle(screen, "red", player.pos, settings.PLAYER_RADIUS)
+        if player.armor_equipped:
+            # Simple chest plate overlay
+            pygame.draw.circle(screen, (150, 90, 40), player.pos, settings.PLAYER_RADIUS - 6, 6)
         if player.is_blocking:
             pts = sword_polygon_points(
                 player.pos,
