@@ -459,6 +459,8 @@ def draw_game(state: GameState):
         pygame.draw.rect(screen, (70, 40, 10), npc_rect, 2)
         head_center = (npc_rect.centerx, npc_rect.top + 12)
         pygame.draw.circle(screen, (240, 210, 180), head_center, 10)
+        prompt = state.font.render('Click on me to talk', True, (255, 255, 200))
+        screen.blit(prompt, (npc_rect.centerx - prompt.get_width() // 2, npc_rect.top - 26))
 
         icon_x = t_rect.centerx - 16
         icon_y = t_rect.centery - 16
