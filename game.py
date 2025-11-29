@@ -14,7 +14,7 @@ from hud import (
     draw_potion_icon,
 )
 from pig import spawn_pigs
-from world import get_door_rect, get_room3_table_rect
+from world import get_door_rect, get_room3_table_rect, get_shopkeeper_rect
 
 
 def reset_round(state: GameState):
@@ -104,6 +104,13 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
         if event.type == pygame.QUIT:
             state.running = False
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if state.level_index >= 3:
+                npc_rect = get_shopkeeper_rect(state.screen)
+                if npc_rect.collidepoint(event.pos):
+                    state.shopkeeper_greeted = True
+                    state.has_map = True
+                    state.map_open = False
+                    return
             if (
                 player.health > 0
                 and player.cooldown <= 0
@@ -157,6 +164,9 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
             state.inventory_open = not state.inventory_open
         if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
             start_dodge(player)
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_m:
+            if state.has_map:
+                state.map_open = not state.map_open
 
 
 def start_dodge(player):
@@ -443,6 +453,13 @@ def draw_game(state: GameState):
         for lr in legs:
             pygame.draw.rect(screen, leg_color, lr)
 
+        # Shopkeeper behind the table
+        npc_rect = get_shopkeeper_rect(screen)
+        pygame.draw.rect(screen, (90, 60, 20), npc_rect)
+        pygame.draw.rect(screen, (70, 40, 10), npc_rect, 2)
+        head_center = (npc_rect.centerx, npc_rect.top + 12)
+        pygame.draw.circle(screen, (240, 210, 180), head_center, 10)
+
         icon_x = t_rect.centerx - 16
         icon_y = t_rect.centery - 16
         if not state.leather_armor_bought:
@@ -564,6 +581,12 @@ def draw_game(state: GameState):
     if state.leather_armor_bought:
         armor_text = state.font.render("Leather Armor: 5% damage blocked", True, (200, 180, 120))
         screen.blit(armor_text, (10, 110))
+    if state.has_map:
+        map_text = state.font.render("Map: press M", True, (180, 220, 255))
+        screen.blit(map_text, (10, 158))
+    if state.shopkeeper_greeted:
+        greet = state.font.render("Shopkeeper: \"You look new. Here's a free map!\"", True, (255, 255, 200))
+        screen.blit(greet, (screen.get_width() // 2 - greet.get_width() // 2, 20))
 
     if state.inventory_open:
         inv_font = pygame.font.SysFont(None, 32)
@@ -600,6 +623,16 @@ def draw_game(state: GameState):
     elif player.dodge_cooldown > 0:
         cd_text = state.font.render(f"Dodge CD: {player.dodge_cooldown:.1f}s", True, (180, 180, 180))
         screen.blit(cd_text, (10, 134))
+    if state.map_open and state.has_map:
+        map_size = settings.MAP_SIZE
+        map_rect = pygame.Rect(
+            screen.get_width() // 2 - map_size // 2,
+            screen.get_height() // 2 - map_size // 2,
+            map_size,
+            map_size,
+        )
+        pygame.draw.rect(screen, (220, 240, 255), map_rect)
+        pygame.draw.rect(screen, (100, 130, 160), map_rect, 3)
 
 
 def run():

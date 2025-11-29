@@ -30,6 +30,9 @@ class GameState:
     door_revealed: bool = False
     level_index: int = 1
     leather_armor_bought: bool = False
+    has_map: bool = False
+    map_open: bool = False
+    shopkeeper_greeted: bool = False
     font: pygame.font.Font | None = None
 
 

@@ -52,3 +52,14 @@ def get_room3_table_rect(screen: pygame.Surface, cam_offset: pygame.Vector2 = py
         table_w,
         table_h,
     )
+
+
+def get_shopkeeper_rect(screen: pygame.Surface) -> pygame.Rect:
+    """Rectangle for the shopkeeper standing behind the table."""
+    t_rect = get_room3_table_rect(screen, pygame.Vector2(0, 0))
+    return pygame.Rect(
+        t_rect.centerx - settings.NPC_WIDTH // 2,
+        t_rect.top - settings.NPC_HEIGHT - 6,
+        settings.NPC_WIDTH,
+        settings.NPC_HEIGHT,
+    )
