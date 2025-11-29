@@ -204,7 +204,13 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                     state.has_map = True
                     state.map_open = False
                     if not state.map_tested:
-                        start_dialogue(state, ["Shopkeeper: \"You look new. Here's a free map!\""])
+                        start_dialogue(
+                            state,
+                            [
+                                "Shopkeeper: \"You look new. Here's a free map!\"",
+                                "Shopkeeper: \"Why dont you try and use it?\"",
+                            ],
+                        )
                     else:
                         start_dialogue(
                             state,
