@@ -72,7 +72,7 @@ def handle_dialogue_click(state: GameState):
                 state,
                 [
                     "Shopkeeper: \"Did you hear the rumor about the possessed creatures?\"",
-                    "Shopkeeper: \"Mladolr, the evil king, has been turning good creatures to bad.\"",
+                    "Shopkeeper: \"Mladolr, the evil king, has been turning good creatures to bad...\"",
                 ],
             )
 
@@ -223,16 +223,6 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                                 "Shopkeeper: \"Why dont you try and use it?\"",
                             ],
                         )
-                    elif not state.rumor_shown:
-                        start_dialogue(
-                            state,
-                            [
-                                "Shopkeeper: \"Did you hear the rumor about the possessed creatures?\"",
-                                "Shopkeeper: \"Mladolr, the evil king, has been turning good creatures to bad.\"",
-                            ],
-                        )
-                    else:
-                        state.dialogue_lines = []
                     return
             if (
                 player.health > 0
@@ -292,14 +282,6 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                 state.map_open = not state.map_open
                 if state.map_open:
                     state.map_tested = True
-                    if state.shopkeeper_greeted:
-                        start_dialogue(
-                            state,
-                            [
-                                "Shopkeeper: \"Did you hear the rumor about the possessed creatures?\"",
-                                "Shopkeeper: \"Mladolr, the evil king, has been turning good creatures to bad.\"",
-                            ],
-                        )
 
 
 def start_dodge(player):
