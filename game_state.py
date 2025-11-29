@@ -34,6 +34,7 @@ class GameState:
     map_open: bool = False
     shopkeeper_greeted: bool = False
     map_tested: bool = False
+    rumor_shown: bool = False
     dialogue_lines: list[str] = field(default_factory=list)
     dialogue_index: int = 0
     dialogue_start_time: float = 0.0

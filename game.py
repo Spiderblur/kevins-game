@@ -65,6 +65,16 @@ def handle_dialogue_click(state: GameState):
         state.dialogue_lines = []
         state.dialogue_index = 0
         state.dialogue_start_time = 0.0
+        # After map is tested, auto-advance to rumor lines once
+        if state.map_tested and state.shopkeeper_greeted and not state.rumor_shown:
+            state.rumor_shown = True
+            start_dialogue(
+                state,
+                [
+                    "Shopkeeper: \"Did you hear the rumor about the possessed creatures?\"",
+                    "Shopkeeper: \"Mladolr, the evil king, has been turning good creatures to bad.\"",
+                ],
+            )
 
 
 def draw_dialogue(state: GameState):
@@ -121,6 +131,8 @@ def reset_round(state: GameState):
     state.dialogue_lines = []
     state.dialogue_index = 0
     state.dialogue_start_time = 0.0
+    state.map_tested = False
+    state.rumor_shown = False
 
     # Start near the shopkeeper/table to save time
     t_rect = get_room3_table_rect(state.screen, pygame.Vector2(0, 0))
@@ -211,7 +223,7 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                                 "Shopkeeper: \"Why dont you try and use it?\"",
                             ],
                         )
-                    else:
+                    elif not state.rumor_shown:
                         start_dialogue(
                             state,
                             [
@@ -219,6 +231,8 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                                 "Shopkeeper: \"Mladolr, the evil king, has been turning good creatures to bad.\"",
                             ],
                         )
+                    else:
+                        state.dialogue_lines = []
                     return
             if (
                 player.health > 0
