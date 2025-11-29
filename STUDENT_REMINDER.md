@@ -6,3 +6,4 @@
 - Show tiny examples so I can copy and test them.
 - Avoid big blocks of text or advanced jargon; keep it calm and encouraging.
 - If something is tricky, add a quick why it matters and what could go wrong.
+- Save big changes to git using terminal commands when necessary
