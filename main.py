@@ -1,5 +1,6 @@
 import pygame
 import sys
+import math
 import random
 
 # pygame setup
@@ -78,9 +79,13 @@ COIN_PICKUP_RADIUS = 50
 coin_pickups = []  # list of dicts: { 'pos': Vector2, 'value': int }
 coin_count = 0
 pig_coin_dropped = False  # legacy, not used with multiple pigs
-SPEED_POTION_COST = 50
+SPEED_POTION_COST = 10
 SPEED_BOOST_MULT = 1.3
-speed_potion_bought = False
+leather_armor_bought = False
+
+# Inventory system: 10 slots, empty string means empty slot
+inventory = ["" for _ in range(10)]
+inventory_open = False
 
 font = pygame.font.SysFont(None, 26)
 
@@ -151,14 +156,25 @@ def spawn_blood_splatter(center, count_min=8, count_max=14, ring_min=8, ring_max
 DOOR_WIDTH = 40
 DOOR_HEIGHT = 120
 DOOR_MARGIN = 10  # space from the right edge
+
+# Make the first room door bigger and more visible
+FIRST_ROOM_DOOR_WIDTH = 120
+FIRST_ROOM_DOOR_HEIGHT = 180
+FIRST_ROOM_DOOR_COLOR = (255, 255, 80)
+FIRST_ROOM_DOOR_OUTLINE = (255, 255, 255)
 door_revealed = False
 level_index = 1
 
 
 def get_door_rect():
-    x = screen.get_width() - DOOR_MARGIN - DOOR_WIDTH
-    y = (screen.get_height() - DOOR_HEIGHT) // 2
-    return pygame.Rect(x, y, DOOR_WIDTH, DOOR_HEIGHT)
+    if level_index == 1:
+        x = screen.get_width() - DOOR_MARGIN - FIRST_ROOM_DOOR_WIDTH
+        y = (screen.get_height() - FIRST_ROOM_DOOR_HEIGHT) // 2
+        return pygame.Rect(x, y, FIRST_ROOM_DOOR_WIDTH, FIRST_ROOM_DOOR_HEIGHT)
+    else:
+        x = screen.get_width() - DOOR_MARGIN - DOOR_WIDTH
+        y = (screen.get_height() - DOOR_HEIGHT) // 2
+        return pygame.Rect(x, y, DOOR_WIDTH, DOOR_HEIGHT)
 
 
 def get_room3_table_rect(cam_offset=pygame.Vector2(0, 0)):
@@ -210,7 +226,13 @@ def draw_potion_icon(x, y, enabled=True):
     """Draw a tiny potion bottle icon at (x,y)."""
     # Colors
     glass = (200, 230, 255) if enabled else (120, 120, 120)
-    liquid = (220, 50, 50) if enabled else (90, 90, 90)
+    # Draw red for healing, blue for speed
+    if enabled == "heal":
+        liquid = (220, 50, 50)
+    elif enabled == "speed":
+        liquid = (50, 120, 255)
+    else:
+        liquid = (90, 90, 90)
     outline = (40, 40, 40)
 
     # Bottle body
@@ -323,7 +345,12 @@ def reset_round():
     global shake_timer
 
     player_health = PLAYER_MAX_HEALTH
-    player_pos.update(START_PLAYER_POS)
+    # For room 3, spawn at the start of the path
+    if level_index == 3:
+        field_height = 2400
+        player_pos.update(PLAYER_RADIUS + 20, field_height / 2)
+    else:
+        player_pos.update(START_PLAYER_POS)
     player_swing_timer = 0.0
     player_cooldown = 0.0
     is_blocking = False
@@ -442,16 +469,32 @@ while running:
                 potion_timer = 1.0
         # Buy speed potion in room 3 by pressing E near the table
         if event.type == pygame.KEYDOWN and event.key == pygame.K_e:
-            if level_index >= 3 and not speed_potion_bought:
-                # Use world-space table rect (no cam offset for overlap test)
+            if level_index >= 3 and not leather_armor_bought:
                 t_rect = get_room3_table_rect(pygame.Vector2(0, 0))
-                # Consider player "near" if circle center is inside rect inflated by radius
                 near_rect = t_rect.inflate(PLAYER_RADIUS * 2, PLAYER_RADIUS * 2)
                 if near_rect.collidepoint(player_pos.x, player_pos.y):
                     if coin_count >= SPEED_POTION_COST:
                         coin_count -= SPEED_POTION_COST
-                        speed_potion_bought = True
-                        player_speed = int(PLAYER_BASE_SPEED * SPEED_BOOST_MULT)
+                        leather_armor_bought = True
+        # Use speed potion by left-clicking it in inventory
+        if inventory_open and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            mouse_x, mouse_y = event.pos
+            slot_w, slot_h = 60, 60
+            margin = 10
+            inv_x = screen.get_width() // 2 - (slot_w * 5 + margin * 4) // 2
+            inv_y = 120
+            for i in range(10):
+                x = inv_x + i * (slot_w + margin)
+                y = inv_y
+                rect = pygame.Rect(x, y, slot_w, slot_h)
+                if rect.collidepoint(mouse_x, mouse_y) and inventory[i] == "Speed Potion":
+                    # Drink the speed potion: 50% speed boost
+                    player_speed = int(PLAYER_BASE_SPEED * 1.5)
+                    inventory[i] = ""
+                    break
+        # Toggle inventory with T
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_t:
+            inventory_open = not inventory_open
 
     # --- Logic ---
     keys = pygame.key.get_pressed()
@@ -624,6 +667,9 @@ while running:
                     if shield_blocks_left <= 0:
                         is_blocking = False  # shield breaks
                 else:
+                    # Apply leather armor reduction if owned
+                    if leather_armor_bought:
+                        dmg_to_player = int(dmg_to_player * 0.95)
                     player_health = max(0, player_health - dmg_to_player)
                     pig["swing_timer"] = 0
                     # Apply knockback to player: push away from this pig
@@ -662,56 +708,101 @@ while running:
             # Place the player near the left edge for the new screen
             player_pos.update(PLAYER_RADIUS + 20, screen.get_height() / 2)
 
-    # --- Drawing ---
-    screen.fill("purple")
 
-    # Camera offset for screen shake (world only, not HUD)
-    if shake_timer > 0:
-        cam_offset = pygame.Vector2(
-            random.uniform(-SHAKE_INTENSITY, SHAKE_INTENSITY),
-            random.uniform(-SHAKE_INTENSITY, SHAKE_INTENSITY),
-        )
-    else:
+    # --- Drawing ---
+    # Only fill purple if not in room 3
+    if level_index != 3:
+        # Draw a solid gray background for rooms 1 and 2
+        bg_gray = (120, 120, 120)
+        screen.fill(bg_gray)
+        # Add a few rocks for decoration
+        rock_color = (100, 100, 100)
+        rock_highlight = (180, 180, 180)
+        rock_positions = [
+            (screen.get_width() * 0.2, screen.get_height() * 0.7),
+            (screen.get_width() * 0.5, screen.get_height() * 0.3),
+            (screen.get_width() * 0.8, screen.get_height() * 0.6),
+        ]
+        for rx, ry in rock_positions:
+            pygame.draw.circle(screen, rock_color, (int(rx), int(ry)), 36)
+            pygame.draw.circle(screen, rock_highlight, (int(rx - 12), int(ry - 14)), 10)
+    # Camera logic
+    if level_index == 3:
         cam_offset = pygame.Vector2(0, 0)
 
-    # Room 3 background and props (field + table), drawn in world space with camera shake
+    # Room 3 background and props (field + table), drawn in world space with camera
     if level_index == 3:
-        # Grass base (oversized rect so shaking doesn't reveal edges)
+        # Make the field the size of the screen (original size)
+        field_width = screen.get_width()
+        field_height = screen.get_height()
         grass_base = (58, 145, 62)
         grass_light = (76, 175, 80)
         pad = 60
+        # Always cover the whole field, so the player can't see the edge
         bg_rect = pygame.Rect(
-            -pad + int(cam_offset.x),
-            -pad + int(cam_offset.y),
-            screen.get_width() + pad * 2,
-            screen.get_height() + pad * 2,
+            -pad,
+            -pad,
+            field_width + pad * 2,
+            field_height + pad * 2,
         )
         pygame.draw.rect(screen, grass_base, bg_rect)
         # Horizontal light stripes for a mowed-field look
         stripe_h = 12
         step = 44
         y_start = -pad
-        y_end = screen.get_height() + pad
+        y_end = field_height + pad
         for yy in range(y_start, y_end, step):
             stripe = pygame.Rect(
-                -pad + int(cam_offset.x),
-                yy + int(cam_offset.y),
-                screen.get_width() + pad * 2,
+                -pad,
+                yy,
+                field_width + pad * 2,
                 stripe_h,
             )
             pygame.draw.rect(screen, grass_light, stripe)
 
-        # Simple wooden table near the right side
+        # --- Draw rocks ---
+        rock_color = (120, 120, 120)
+        rock_shadow = (80, 80, 80)
+        # Fewer rocks, more spread out
+        rock_positions = [
+            (field_width * 0.18, field_height * 0.62),
+            (field_width * 0.75, field_height * 0.80),
+            (field_width * 0.40, field_height * 0.40),
+            (field_width * 0.60, field_height * 0.25),
+        ]
+        for rx, ry in rock_positions:
+            center = pygame.Vector2(rx, ry)
+            pygame.draw.circle(screen, rock_shadow, (int(center.x + 8), int(center.y + 8)), 22)
+            pygame.draw.circle(screen, rock_color, (int(center.x), int(center.y)), 22)
+            pygame.draw.circle(screen, (180, 180, 180), (int(center.x - 6), int(center.y - 8)), 8)
+
+        # --- Draw more flowers, spread out ---
+        flower_centers = [
+            (field_width * 0.13, field_height * 0.63),
+            (field_width * 0.60, field_height * 0.60),
+            (field_width * 0.21, field_height * 0.66),
+            (field_width * 0.80, field_height * 0.30),
+        ]
+        for fx, fy in flower_centers:
+            center = pygame.Vector2(fx, fy)
+            # Draw petals
+            for angle in range(0, 360, 72):
+                offset = pygame.Vector2(0, 10).rotate(angle)
+                pygame.draw.circle(screen, (255, 255, 255), (int(center.x + offset.x), int(center.y + offset.y)), 6)
+            # Draw center
+            pygame.draw.circle(screen, (255, 220, 80), (int(center.x), int(center.y)), 6)
+
+        # --- Draw the table (same as before) ---
         table_color = (150, 100, 40)
         table_outline = (90, 60, 20)
         leg_color = (120, 80, 35)
         table_w, table_h = 160, 60
         leg_w, leg_h = 10, 36
-        # Table world center position
-        t_center = pygame.Vector2(screen.get_width() * 0.68, screen.get_height() * 0.60)
+        # Table world center position (same as before)
+        t_center = pygame.Vector2(field_width * 0.12, field_height * 0.60)
         t_rect = pygame.Rect(
-            int(t_center.x - table_w / 2 + cam_offset.x),
-            int(t_center.y - table_h / 2 + cam_offset.y),
+            int(t_center.x - table_w / 2),
+            int(t_center.y - table_h / 2),
             table_w,
             table_h,
         )
@@ -731,15 +822,18 @@ while running:
             pygame.draw.rect(screen, leg_color, lr)
 
         # Speed potion for sale on the table (cost 50 coins)
-        icon_x = t_rect.centerx - 8
-        icon_y = t_rect.centery - 10
-        draw_potion_icon(icon_x, icon_y, enabled=(not speed_potion_bought))
+        # Leather armor for sale on the table
+        icon_x = t_rect.centerx - 16
+        icon_y = t_rect.centery - 16
+        if not leather_armor_bought:
+            # Draw a brown armor icon (simple rectangle)
+            pygame.draw.rect(screen, (139, 69, 19), (icon_x, icon_y, 32, 32))
         label = (
-            f"Speed Potion - {SPEED_POTION_COST} coins"
-            if not speed_potion_bought
+            f"Leather Armor - {SPEED_POTION_COST} coins"
+            if not leather_armor_bought
             else "SOLD OUT"
         )
-        tip = "Press E to buy" if not speed_potion_bought else "Enjoy the speed!"
+        tip = "Press E to buy" if not leather_armor_bought else "You own it!"
         label_surf = font.render(label, True, (255, 255, 255))
         tip_surf = font.render(tip, True, (220, 220, 220))
         screen.blit(
@@ -752,7 +846,7 @@ while running:
     # Player health bar (top-left) styled like the pig's
     draw_player_health_bar_topleft(player_health, PLAYER_MAX_HEALTH, 10, 10)
     # Potion icon next to health bar
-    draw_potion_icon(100, 6, enabled=(potion_count > 0))
+    draw_potion_icon(100, 6, enabled="heal" if potion_count > 0 else None)
     # Coin icon and count
     draw_coin_icon(124, 6, enabled=True)
     coins_text = font.render(f"x {coin_count}", True, (255, 255, 255))
@@ -760,12 +854,21 @@ while running:
 
     # Draw player only if alive
     if player_health > 0:
-        pygame.draw.circle(screen, "red", player_pos + cam_offset, PLAYER_RADIUS)
-        # Draw shield when blocking (in front of the player)
+        # Calculate leg animation (swing back and forth as player moves)
+        move_speed = player_speed if player_health > 0 else 0
+        leg_swing = 0
+        if move_speed > 0 and (keys[pygame.K_w] or keys[pygame.K_a] or keys[pygame.K_s] or keys[pygame.K_d]):
+            leg_swing = int(18 * math.sin(pygame.time.get_ticks() * 0.008))
+        # Draw legs (2 lines)
+        p = player_pos
+        leg_len = PLAYER_RADIUS + 18
+        pygame.draw.line(screen, (60, 0, 0), (int(p.x - 16), int(p.y + PLAYER_RADIUS)), (int(p.x - 16 + leg_swing), int(p.y + leg_len)), 8)
+        pygame.draw.line(screen, (60, 0, 0), (int(p.x + 16), int(p.y + PLAYER_RADIUS)), (int(p.x + 16 - leg_swing), int(p.y + leg_len)), 8)
+        # Draw body
+        pygame.draw.circle(screen, "red", player_pos, PLAYER_RADIUS)
         if is_blocking:
-            # Build a short rectangle in front of the player facing
             pts = sword_polygon_points(
-                player_pos + cam_offset,
+                player_pos,
                 player_facing,
                 SHIELD_DISTANCE,
                 SHIELD_LENGTH,
@@ -776,28 +879,31 @@ while running:
     # Draw dropped coins in the world
     for coin in coin_pickups:
         cpos = coin["pos"]
-        cp = cpos + cam_offset
-        pygame.draw.circle(screen, (255, 215, 0), (int(cp.x), int(cp.y)), 10)
-        pygame.draw.circle(screen, (90, 70, 0), (int(cp.x), int(cp.y)), 10, 2)
+        pygame.draw.circle(screen, (255, 215, 0), (int(cpos.x), int(cpos.y)), 10)
+        pygame.draw.circle(screen, (90, 70, 0), (int(cpos.x), int(cpos.y)), 10, 2)
 
     # Draw door (world space) when revealed
     if door_revealed:
         door = get_door_rect()
-        # Apply camera offset to rect copy
-        door_draw = pygame.Rect(
-            door.x + int(cam_offset.x),
-            door.y + int(cam_offset.y),
-            door.width,
-            door.height,
-        )
-        pygame.draw.rect(screen, (90, 60, 20), door_draw)  # wooden door
-        pygame.draw.rect(screen, (180, 140, 60), door_draw, 3)  # outline
+        if level_index == 1:
+            pygame.draw.rect(screen, FIRST_ROOM_DOOR_COLOR, door)
+            pygame.draw.rect(screen, FIRST_ROOM_DOOR_OUTLINE, door, 6)
+        else:
+            pygame.draw.rect(screen, (90, 60, 20), door)  # wooden door
+            pygame.draw.rect(screen, (180, 140, 60), door, 3)  # outline
 
     # Draw pigs and their swords
     for pig in pigs:
         if pig["health"] <= 0:
             continue
-        pygame.draw.circle(screen, "green", pig["pos"] + cam_offset, PIG_RADIUS)
+        # Pig leg animation
+        pig_leg_swing = int(16 * math.sin(pygame.time.get_ticks() * 0.008 + pig["pos"].x))
+        pp = pig["pos"]
+        pig_leg_len = PIG_RADIUS + 14
+        pygame.draw.line(screen, (0, 60, 0), (int(pp.x - 14), int(pp.y + PIG_RADIUS)), (int(pp.x - 14 + pig_leg_swing), int(pp.y + pig_leg_len)), 7)
+        pygame.draw.line(screen, (0, 60, 0), (int(pp.x + 14), int(pp.y + PIG_RADIUS)), (int(pp.x + 14 - pig_leg_swing), int(pp.y + pig_leg_len)), 7)
+        # Pig body
+        pygame.draw.circle(screen, "green", pig["pos"], PIG_RADIUS)
 
         # Pig sword (rotated polygon) with swing animation
         pig_draw_dir = (
@@ -808,7 +914,7 @@ while running:
             else pig["facing"]
         )
         es_pts = sword_polygon_points(
-            pig["pos"] + cam_offset,
+            pig["pos"],
             pig_draw_dir,
             PIG_SWING_DISTANCE,
             SWORD_LENGTH,
@@ -820,9 +926,11 @@ while running:
             pygame.draw.polygon(screen, (200, 200, 200), es_pts, 1)
 
         # Pig health bar
-        draw_health_bar_above(pig["pos"] + cam_offset, pig["health"], PIG_MAX_HEALTH)
+        draw_health_bar_above(pig["pos"], pig["health"], PIG_MAX_HEALTH)
 
-    # Draw player sword (only if alive) as rotated polygon with swing animation
+
+# Draw player sword (only if alive) as rotated polygon with swing animation
+
     if player_health > 0:
         player_draw_dir = (
             get_swing_dir(
@@ -835,7 +943,7 @@ while running:
             else player_facing
         )
         ps_pts = sword_polygon_points(
-            player_pos + cam_offset,
+            player_pos,
             player_draw_dir,
             PLAYER_SWING_DISTANCE,
             SWORD_LENGTH,
@@ -846,17 +954,17 @@ while running:
         else:
             pygame.draw.polygon(screen, (200, 200, 200), ps_pts, 1)
 
-    # Draw blood splatters (outlines) in world space
+# Draw blood splatters (outlines) in world space
+
     if blood_splats:
         BLOOD_COLOR = (160, 0, 0)
         for s in blood_splats:
             for pos, rad in s["points"]:
-                p = pos + cam_offset
                 pygame.draw.circle(
-                    screen, BLOOD_COLOR, (int(p.x), int(p.y)), int(rad), 1
+                    screen, BLOOD_COLOR, (int(pos.x), int(pos.y)), int(rad), 1
                 )
 
-    # HUD text
+# HUD text
     pigs_alive = sum(1 for p in pigs if p["health"] > 0)
     hud2 = font.render(f"Pigs alive: {pigs_alive}", True, (255, 255, 255))
     hud3 = font.render(
@@ -865,7 +973,39 @@ while running:
     screen.blit(hud2, (10, 36))
     screen.blit(hud3, (10, 62))
 
-    # Show warning when shield is on its last two hits, and 'broken' when at 0
+    # Show armor status
+    if leather_armor_bought:
+        armor_text = font.render("Leather Armor: 5% damage blocked", True, (200, 180, 120))
+        screen.blit(armor_text, (10, 110))
+
+    # Draw inventory if open
+    if inventory_open:
+        inv_font = pygame.font.SysFont(None, 32)
+        inv_bg = (30, 30, 60)
+        slot_w, slot_h = 60, 60
+        margin = 10
+        inv_x = screen.get_width() // 2 - (slot_w * 5 + margin * 4) // 2
+        inv_y = 120
+        # Draw 10 slots in a row
+        for i in range(10):
+            x = inv_x + i * (slot_w + margin)
+            y = inv_y
+            pygame.draw.rect(screen, inv_bg, (x, y, slot_w, slot_h))
+            pygame.draw.rect(screen, (200, 200, 255), (x, y, slot_w, slot_h), 2)
+            item = inventory[i]
+            if item == "Speed Potion":
+                # Draw blue potion icon in slot
+                draw_potion_icon(x + slot_w // 2 - 7, y + slot_h // 2 - 14, enabled="speed")
+                label = inv_font.render("Speed", True, (120, 180, 255))
+                screen.blit(label, (x + 4, y + slot_h - 24))
+            elif item:
+                label = inv_font.render(item, True, (255, 255, 255))
+                screen.blit(label, (x + 4, y + slot_h // 2 - 8))
+            # Draw slot number
+            num = inv_font.render(str(i+1), True, (180, 180, 180))
+            screen.blit(num, (x + slot_w - 18, y + slot_h - 28))
+
+# Show warning when shield is on its last two hits, and 'broken' when at 0
     if shield_blocks_left == 0:
         warn = font.render("shield broken!", True, (255, 120, 120))
         screen.blit(warn, (10, 88))
@@ -873,9 +1013,11 @@ while running:
         warn = font.render("shield damaged!", True, (255, 235, 59))
         screen.blit(warn, (10, 88))
 
-    # Flip and tick
+# Flip and tick
     pygame.display.flip()
     dt = clock.tick(60) / 1000
+
+sys.exit()
 
 pygame.quit()
 sys.exit()
