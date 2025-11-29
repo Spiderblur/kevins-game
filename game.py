@@ -157,6 +157,8 @@ def draw_dialogue(state: GameState):
 def reset_round(state: GameState):
     """Reset positions, health, enemies, and timers for the current level."""
     player = state.player
+    if state.level_index == 1:
+        state.coin_count = 0
     player.health = player.max_health
     player.speed = settings.PLAYER_BASE_SPEED
     player.swing_timer = 0.0
@@ -172,7 +174,6 @@ def reset_round(state: GameState):
     player.dodge_cooldown = 0.0
     player.knockback_timer = 0.0
     player.knockback_vec.update(0, 0)
-    state.coin_count = 10
     state.dialogue_lines = []
     state.dialogue_index = 0
     state.dialogue_start_time = 0.0
@@ -184,9 +185,12 @@ def reset_round(state: GameState):
     state.resume_lines = []
     state.resume_index = 0
 
-    # Start near the shopkeeper/table to save time
-    t_rect = get_room3_table_rect(state.screen, pygame.Vector2(0, 0))
-    player.pos.update(t_rect.centerx - 80, t_rect.bottom + player.radius)
+    # Start position depends on level
+    if state.level_index == 3:
+        t_rect = get_room3_table_rect(state.screen, pygame.Vector2(0, 0))
+        player.pos.update(t_rect.centerx - 80, t_rect.bottom + player.radius)
+    else:
+        player.pos.update(settings.SCREEN_WIDTH / 2, settings.SCREEN_HEIGHT / 2)
 
     state.coin_pickups.clear()
     state.blood_splats.clear()
