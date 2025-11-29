@@ -44,7 +44,8 @@ def get_door_rect(level_index: int, screen: pygame.Surface) -> pygame.Rect:
 def get_room3_table_rect(screen: pygame.Surface, cam_offset: pygame.Vector2 = pygame.Vector2(0, 0)) -> pygame.Rect:
     """Table rect in room 3 (world space), optionally offset for camera."""
     table_w, table_h = 160, 60
-    t_center = pygame.Vector2(screen.get_width() * 0.68, screen.get_height() * 0.60)
+    # Match the drawn table location in game.draw_game (left side of the field).
+    t_center = pygame.Vector2(screen.get_width() * 0.12, screen.get_height() * 0.60)
     return pygame.Rect(
         int(t_center.x - table_w / 2 + cam_offset.x),
         int(t_center.y - table_h / 2 + cam_offset.y),
