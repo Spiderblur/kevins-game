@@ -28,11 +28,15 @@ class GameState:
     blood_splats: list[dict] = field(default_factory=list)
     shake_timer: float = 0.0
     door_revealed: bool = False
-    level_index: int = 1
+    level_index: int = 3  # start near the shopkeeper
     leather_armor_bought: bool = False
     has_map: bool = False
     map_open: bool = False
     shopkeeper_greeted: bool = False
+    map_tested: bool = False
+    dialogue_lines: list[str] = field(default_factory=list)
+    dialogue_index: int = 0
+    dialogue_start_time: float = 0.0
     font: pygame.font.Font | None = None
 
 

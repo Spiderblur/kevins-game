@@ -1,5 +1,6 @@
 import math
 import sys
+from typing import List
 
 import pygame
 
@@ -15,6 +16,87 @@ from hud import (
 )
 from pig import spawn_pigs
 from world import get_door_rect, get_room3_table_rect, get_shopkeeper_rect
+
+DIALOGUE_BOX_PADDING = 10
+DIALOGUE_BUTTON_PADDING = 6
+
+
+def start_dialogue(state: GameState, lines: List[str]):
+    """Begin showing dialogue lines with typewriter reveal."""
+    state.dialogue_lines = list(lines)
+    state.dialogue_index = 0
+    state.dialogue_start_time = pygame.time.get_ticks() / 1000.0
+
+
+def current_dialogue_text(state: GameState):
+    if not state.dialogue_lines or state.dialogue_index >= len(state.dialogue_lines):
+        return None
+    return state.dialogue_lines[state.dialogue_index]
+
+
+def dialogue_reveal(state: GameState):
+    """Return (shown_text, is_full) for current dialogue line."""
+    line = current_dialogue_text(state)
+    if line is None:
+        return "", True
+    now = pygame.time.get_ticks() / 1000.0
+    elapsed = max(0.0, now - state.dialogue_start_time)
+    chars = int(elapsed * settings.DIALOGUE_CHARS_PER_SEC)
+    if chars >= len(line):
+        return line, True
+    return line[:chars], False
+
+
+def handle_dialogue_click(state: GameState):
+    """Advance dialogue: finish reveal or go to next line."""
+    line = current_dialogue_text(state)
+    if line is None:
+        return
+    shown, full = dialogue_reveal(state)
+    now = pygame.time.get_ticks() / 1000.0
+    if not full:
+        # Instantly finish this line
+        state.dialogue_start_time = now - (len(line) / settings.DIALOGUE_CHARS_PER_SEC)
+        return
+    if state.dialogue_index + 1 < len(state.dialogue_lines):
+        state.dialogue_index += 1
+        state.dialogue_start_time = now
+    else:
+        state.dialogue_lines = []
+        state.dialogue_index = 0
+        state.dialogue_start_time = 0.0
+
+
+def draw_dialogue(state: GameState):
+    """Draw the current dialogue with a simple typewriter reveal and a prompt button."""
+    line = current_dialogue_text(state)
+    if line is None or state.font is None:
+        return
+    shown, full = dialogue_reveal(state)
+    screen = state.screen
+    text_surf = state.font.render(shown, True, (255, 255, 200))
+    box_rect = text_surf.get_rect()
+    box_rect.inflate_ip(DIALOGUE_BOX_PADDING * 2, DIALOGUE_BOX_PADDING * 2)
+    box_rect.centerx = screen.get_width() // 2
+    box_rect.top = 20
+    pygame.draw.rect(screen, (30, 30, 60), box_rect)
+    pygame.draw.rect(screen, (200, 200, 255), box_rect, 2)
+    text_pos = (
+        box_rect.centerx - text_surf.get_width() // 2,
+        box_rect.top + DIALOGUE_BOX_PADDING,
+    )
+    screen.blit(text_surf, text_pos)
+
+    # Button-like prompt below the box
+    prompt_text = "Click text to continue"
+    prompt_surf = state.font.render(prompt_text, True, (255, 255, 255) if full else (180, 180, 180))
+    prompt_rect = prompt_surf.get_rect()
+    prompt_rect.centerx = box_rect.centerx
+    prompt_rect.top = box_rect.bottom + DIALOGUE_BUTTON_PADDING
+    back_rect = prompt_rect.inflate(12, 8)
+    pygame.draw.rect(screen, (40, 40, 70), back_rect)
+    pygame.draw.rect(screen, (150, 150, 200), back_rect, 2)
+    screen.blit(prompt_surf, prompt_rect)
 
 
 def reset_round(state: GameState):
@@ -35,13 +117,14 @@ def reset_round(state: GameState):
     player.dodge_cooldown = 0.0
     player.knockback_timer = 0.0
     player.knockback_vec.update(0, 0)
+    state.coin_count = 10
+    state.dialogue_lines = []
+    state.dialogue_index = 0
+    state.dialogue_start_time = 0.0
 
-    # Start positions
-    if state.level_index == 3:
-        field_height = 2400
-        player.pos.update(settings.PLAYER_RADIUS + 20, field_height / 2)
-    else:
-        player.pos.update(settings.SCREEN_WIDTH / 2, settings.SCREEN_HEIGHT / 2)
+    # Start near the shopkeeper/table to save time
+    t_rect = get_room3_table_rect(state.screen, pygame.Vector2(0, 0))
+    player.pos.update(t_rect.centerx - 80, t_rect.bottom + player.radius)
 
     state.coin_pickups.clear()
     state.blood_splats.clear()
@@ -100,16 +183,36 @@ def handle_death_screen(state: GameState, events: list[pygame.event.Event]):
 
 def handle_events(state: GameState, events: list[pygame.event.Event]):
     player = state.player
+    if state.map_open:
+        for event in events:
+            if event.type == pygame.QUIT:
+                state.running = False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_m:
+                state.map_open = False
+        return
     for event in events:
         if event.type == pygame.QUIT:
             state.running = False
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if state.dialogue_lines:
+                handle_dialogue_click(state)
+                continue
             if state.level_index >= 3:
                 npc_rect = get_shopkeeper_rect(state.screen)
                 if npc_rect.collidepoint(event.pos):
                     state.shopkeeper_greeted = True
                     state.has_map = True
                     state.map_open = False
+                    if not state.map_tested:
+                        start_dialogue(state, ["Shopkeeper: \"You look new. Here's a free map!\""])
+                    else:
+                        start_dialogue(
+                            state,
+                            [
+                                "Shopkeeper: \"Did you hear the rumor about the possessed creatures?\"",
+                                "Shopkeeper: \"Mladolr, the evil king, has been turning good creatures to bad.\"",
+                            ],
+                        )
                     return
             if (
                 player.health > 0
@@ -167,6 +270,16 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
         if event.type == pygame.KEYDOWN and event.key == pygame.K_m:
             if state.has_map:
                 state.map_open = not state.map_open
+                if state.map_open:
+                    state.map_tested = True
+                    if state.shopkeeper_greeted:
+                        start_dialogue(
+                            state,
+                            [
+                                "Shopkeeper: \"Did you hear the rumor about the possessed creatures?\"",
+                                "Shopkeeper: \"Mladolr, the evil king, has been turning good creatures to bad.\"",
+                            ],
+                        )
 
 
 def start_dodge(player):
@@ -185,6 +298,8 @@ def start_dodge(player):
 def update_game(state: GameState):
     player = state.player
     keys = pygame.key.get_pressed()
+    if state.map_open:
+        return
     if player.health > 0:
         move = pygame.Vector2(0, 0)
         if keys[pygame.K_w]:
@@ -586,9 +701,6 @@ def draw_game(state: GameState):
     if state.has_map:
         map_text = state.font.render("Map: press M", True, (180, 220, 255))
         screen.blit(map_text, (10, 158))
-    if state.shopkeeper_greeted:
-        greet = state.font.render("Shopkeeper: \"You look new. Here's a free map!\"", True, (255, 255, 200))
-        screen.blit(greet, (screen.get_width() // 2 - greet.get_width() // 2, 20))
 
     if state.inventory_open:
         inv_font = pygame.font.SysFont(None, 32)
@@ -625,16 +737,13 @@ def draw_game(state: GameState):
     elif player.dodge_cooldown > 0:
         cd_text = state.font.render(f"Dodge CD: {player.dodge_cooldown:.1f}s", True, (180, 180, 180))
         screen.blit(cd_text, (10, 134))
+    if state.dialogue_lines:
+        draw_dialogue(state)
     if state.map_open and state.has_map:
-        map_size = settings.MAP_SIZE
-        map_rect = pygame.Rect(
-            screen.get_width() // 2 - map_size // 2,
-            screen.get_height() // 2 - map_size // 2,
-            map_size,
-            map_size,
-        )
-        pygame.draw.rect(screen, (220, 240, 255), map_rect)
-        pygame.draw.rect(screen, (100, 130, 160), map_rect, 3)
+        full_rect = pygame.Rect(0, 0, screen.get_width(), screen.get_height())
+        pygame.draw.rect(screen, (220, 240, 255), full_rect)
+        pygame.draw.rect(screen, (100, 130, 160), full_rect, 6)
+        return
 
 
 def run():
