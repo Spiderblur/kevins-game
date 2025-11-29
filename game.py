@@ -30,6 +30,9 @@ def reset_round(state: GameState):
     player.is_drinking_potion = False
     player.potion_timer = 0.0
     player.armor_equipped = state.leather_armor_bought
+    player.is_dodging = False
+    player.dodge_timer = 0.0
+    player.dodge_cooldown = 0.0
     player.knockback_timer = 0.0
     player.knockback_vec.update(0, 0)
 
@@ -152,6 +155,21 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                     break
         if event.type == pygame.KEYDOWN and event.key == pygame.K_t:
             state.inventory_open = not state.inventory_open
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_m:
+            start_dodge(player)
+
+
+def start_dodge(player):
+    """Start a quick dodge if ready."""
+    if player.health <= 0 or player.is_dodging or player.dodge_cooldown > 0:
+        return
+    dir_vec = pygame.Vector2(player.facing)
+    if dir_vec.length_squared() == 0:
+        dir_vec = pygame.Vector2(1, 0)
+    player.dodge_dir = dir_vec.normalize()
+    player.is_dodging = True
+    player.dodge_timer = settings.DODGE_DURATION
+    player.dodge_cooldown = settings.DODGE_COOLDOWN
 
 
 def update_game(state: GameState):
@@ -167,9 +185,15 @@ def update_game(state: GameState):
             move.x -= 1
         if keys[pygame.K_d]:
             move.x += 1
-        if move.length_squared() > 0:
-            move = move.normalize()
-            player.pos += move * player.speed * state.dt
+        if player.is_dodging:
+            player.pos += player.dodge_dir * player.speed * settings.DODGE_SPEED_MULT * state.dt
+            player.dodge_timer -= state.dt
+            if player.dodge_timer <= 0:
+                player.is_dodging = False
+        else:
+            if move.length_squared() > 0:
+                move = move.normalize()
+                player.pos += move * player.speed * state.dt
 
         if player.knockback_timer > 0:
             player.pos += player.knockback_vec * (settings.KNOCKBACK_SPEED * state.dt)
@@ -220,6 +244,10 @@ def update_game(state: GameState):
             player.health = min(player.max_health, player.health + settings.POTION_HEAL)
             player.potion_count -= 1
             player.is_drinking_potion = False
+    if player.dodge_cooldown > 0:
+        player.dodge_cooldown -= state.dt
+        if player.dodge_cooldown < 0:
+            player.dodge_cooldown = 0
 
     if state.shake_timer > 0:
         state.shake_timer -= state.dt
@@ -296,7 +324,9 @@ def update_game(state: GameState):
                 settings.SWORD_WIDTH,
             )
             if dmg_to_player:
-                if player.is_blocking:
+                if player.is_dodging:
+                    dmg_to_player = 0
+                elif player.is_blocking:
                     pig.swing_timer = 0
                     if player.shield_blocks_left > 0:
                         player.shield_blocks_left -= 1
@@ -443,7 +473,8 @@ def draw_game(state: GameState):
         leg_len = settings.PLAYER_RADIUS + 18
         pygame.draw.line(screen, (60, 0, 0), (int(p.x - 16), int(p.y + settings.PLAYER_RADIUS)), (int(p.x - 16 + leg_swing), int(p.y + leg_len)), 8)
         pygame.draw.line(screen, (60, 0, 0), (int(p.x + 16), int(p.y + settings.PLAYER_RADIUS)), (int(p.x + 16 - leg_swing), int(p.y + leg_len)), 8)
-        pygame.draw.circle(screen, "red", player.pos, settings.PLAYER_RADIUS)
+        body_color = (200, 80, 80) if player.is_dodging else "red"
+        pygame.draw.circle(screen, body_color, player.pos, settings.PLAYER_RADIUS)
         if player.armor_equipped:
             # Simple chest plate overlay
             pygame.draw.circle(screen, (150, 90, 40), player.pos, settings.PLAYER_RADIUS - 6, 6)
@@ -563,6 +594,12 @@ def draw_game(state: GameState):
     elif 0 < player.shield_blocks_left <= 2:
         warn = state.font.render("shield damaged!", True, (255, 235, 59))
         screen.blit(warn, (10, 88))
+    if player.is_dodging:
+        dodge_text = state.font.render("Dodging!", True, (120, 255, 120))
+        screen.blit(dodge_text, (10, 134))
+    elif player.dodge_cooldown > 0:
+        cd_text = state.font.render(f"Dodge CD: {player.dodge_cooldown:.1f}s", True, (180, 180, 180))
+        screen.blit(cd_text, (10, 134))
 
 
 def run():
