@@ -31,6 +31,15 @@ class PlayerState:
     dodge_timer: float = 0.0
     dodge_cooldown: float = 0.0
     dodge_dir: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(1, 0))
+    # Equipment slots
+    head_item: str = "Traveler Hood"
+    body_item: str = "Cloth Tunic"
+    legs_item: str = "Traveler Pants"
+    weapon_item: str = ""
+    bow_equipped: bool = False
+    bow_cooldown: float = 0.0
+    stamina: float = settings.STAMINA_MAX
+    is_sprinting: bool = False
 
 
 def create_player(start_pos: pygame.Vector2) -> PlayerState:

@@ -19,7 +19,7 @@ PIG_SPEED = 150
 CHASE_RANGE = 500
 
 # Sword
-SWORD_LENGTH = 60
+SWORD_LENGTH = 64
 SWORD_WIDTH = 14
 PLAYER_DAMAGE = 20
 PIG_DAMAGE = 5  # each pig deals 5 damage
@@ -27,9 +27,18 @@ PLAYER_SWING_TIME = 0.18  # seconds sword is "active"
 PIG_SWING_TIME = 0.18
 PLAYER_COOLDOWN = 0.5  # time before next swing
 PIG_COOLDOWN = 0.5
-PLAYER_SWING_DISTANCE = PLAYER_RADIUS + 8
-PIG_SWING_DISTANCE = PIG_RADIUS + 8
+PLAYER_SWING_DISTANCE = PLAYER_RADIUS + 16
+PIG_SWING_DISTANCE = PIG_RADIUS + 16
 SWING_ARC_DEG = 80  # total arc angle for sword swing animation
+BOW_DAMAGE = int(PLAYER_DAMAGE * 0.6)
+BOW_SPEED = 640
+BOW_COOLDOWN = 0.45
+
+# Stamina / sprint
+STAMINA_MAX = 100
+STAMINA_REGEN_RATE = 25  # per second
+STAMINA_USE_RATE = 20  # per second while sprinting
+SPRINT_SPEED_MULT = 1.35
 
 # Knockback
 KNOCKBACK_SPEED = 420  # pixels per second pushed back

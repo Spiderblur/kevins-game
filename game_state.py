@@ -26,6 +26,7 @@ class GameState:
     coin_pickups: list[dict] = field(default_factory=list)
     coin_count: int = 0
     blood_splats: list[dict] = field(default_factory=list)
+    arrows: list[dict] = field(default_factory=list)
     shake_timer: float = 0.0
     door_revealed: bool = False
     level_index: int = 1
@@ -44,6 +45,7 @@ class GameState:
     resume_lines: list[str] = field(default_factory=list)
     resume_index: int = 0
     font: pygame.font.Font | None = None
+    map_comment_shown: bool = False
 
 
 def create_game_state(screen: pygame.Surface) -> GameState:
@@ -54,4 +56,23 @@ def create_game_state(screen: pygame.Surface) -> GameState:
         pygame.Vector2(settings.SCREEN_WIDTH / 2, settings.SCREEN_HEIGHT / 2)
     )
     state = GameState(screen=screen, clock=clock, player=player, font=font)
+    # Starter gear to demo equipment slots (grouped: armor, weapons, potions)
+    starter = [
+        # Armor section
+        "Explorer Cap",
+        "Cloth Tunic",
+        "Traveler Pants",
+        # Weapons section
+        "Sword",
+        "Bow",
+        # Potions section
+        "Health Potion",
+    ]
+    for i, item in enumerate(starter):
+        if i < len(state.inventory):
+            state.inventory[i] = item
+    # Start at the very beginning of the game (first level)
+    state.level_index = 1
+    # Start with no coins by default
+    state.coin_count = 0
     return state

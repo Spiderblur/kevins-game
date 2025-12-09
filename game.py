@@ -12,7 +12,18 @@ from hud import (
     draw_coin_icon,
     draw_health_bar_above,
     draw_player_health_bar_topleft,
+    draw_player_stamina_bar_topleft,
     draw_potion_icon,
+)
+from inventory import (
+    add_item_to_inventory,
+    apply_equipment_effects,
+    draw_inventory_panel,
+    ensure_default_equipment,
+    equip_item_from_inventory,
+        get_inventory_layout,
+        get_slot_rect,
+        get_grouped_slot_rects,
 )
 from pig import spawn_pigs, make_pig
 from world import get_door_rect, get_room3_table_rect, get_shopkeeper_rect
@@ -168,12 +179,14 @@ def reset_round(state: GameState):
     player.potion_count = settings.START_POTION_COUNT
     player.is_drinking_potion = False
     player.potion_timer = 0.0
-    player.armor_equipped = state.leather_armor_bought
     player.is_dodging = False
     player.dodge_timer = 0.0
     player.dodge_cooldown = 0.0
     player.knockback_timer = 0.0
     player.knockback_vec.update(0, 0)
+    player.stamina = settings.STAMINA_MAX
+    player.is_sprinting = False
+    ensure_default_equipment(player)
     state.dialogue_lines = []
     state.dialogue_index = 0
     state.dialogue_start_time = 0.0
@@ -194,6 +207,7 @@ def reset_round(state: GameState):
 
     state.coin_pickups.clear()
     state.blood_splats.clear()
+    state.arrows.clear()
     state.shake_timer = 0.0
     state.game_over = False
     state.door_revealed = False
@@ -305,19 +319,31 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                             ],
                         )
                     return
-            if (
-                player.health > 0
-                and player.cooldown <= 0
-                and player.swing_timer <= 0
-                and not player.is_blocking
-                and not player.is_drinking_potion
-            ):
-                player.swing_timer = settings.PLAYER_SWING_TIME
-                player.cooldown = settings.PLAYER_COOLDOWN
-                if player.facing.length_squared() > 0:
-                    player.swing_base_dir = player.facing.normalize()
-                else:
-                    player.swing_base_dir = pygame.Vector2(1, 0)
+            # Left-click does sword swing; Ctrl+left-click fires the bow.
+            if player.health > 0 and not player.is_drinking_potion:
+                mods = pygame.key.get_mods()
+                is_ctrl_held = mods & pygame.KMOD_CTRL
+                if is_ctrl_held and player.bow_equipped and player.bow_cooldown <= 0:
+                    # Ctrl+left-click fires the bow
+                    dir_vec = pygame.Vector2(player.facing)
+                    if dir_vec.length_squared() == 0:
+                        dir_vec = pygame.Vector2(1, 0)
+                    dir_vec = dir_vec.normalize()
+                    spawn_pos = player.pos + dir_vec * (settings.PLAYER_RADIUS + 10)
+                    state.arrows.append({
+                        "pos": spawn_pos,
+                        "dir": dir_vec,
+                    })
+                    player.bow_cooldown = settings.BOW_COOLDOWN
+                elif not is_ctrl_held and player.cooldown <= 0 and player.swing_timer <= 0:
+                    # Left-click does sword swing
+                    player.swing_timer = settings.PLAYER_SWING_TIME
+                    player.cooldown = settings.PLAYER_COOLDOWN
+                    player.is_blocking = False  # Stop blocking when attacking
+                    if player.facing.length_squared() > 0:
+                        player.swing_base_dir = player.facing.normalize()
+                    else:
+                        player.swing_base_dir = pygame.Vector2(1, 0)
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
             if player.health > 0 and player.shield_blocks_left > 0:
                 player.is_blocking = True
@@ -339,30 +365,71 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                 if near_rect.collidepoint(player.pos.x, player.pos.y) and state.coin_count >= settings.SPEED_POTION_COST:
                     state.coin_count -= settings.SPEED_POTION_COST
                     state.leather_armor_bought = True
-                    player.armor_equipped = True
+                    prev_body = player.body_item
+                    player.body_item = "Leather Armor"
+                    apply_equipment_effects(player)
+                    if prev_body and prev_body not in ("", player.body_item):
+                        add_item_to_inventory(state, prev_body)
         if state.inventory_open and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             mouse_x, mouse_y = event.pos
-            slot_w, slot_h = 60, 60
-            margin = 10
-            inv_x = state.screen.get_width() // 2 - (slot_w * 5 + margin * 4) // 2
-            inv_y = 120
-            for i in range(settings.INVENTORY_SLOTS):
-                x = inv_x + i * (slot_w + margin)
-                y = inv_y
-                rect = pygame.Rect(x, y, slot_w, slot_h)
-                if rect.collidepoint(mouse_x, mouse_y) and state.inventory[i] == "Speed Potion":
-                    player.speed = int(settings.PLAYER_BASE_SPEED * settings.SPEED_BOOST_MULT)
-                    state.inventory[i] = ""
+            grouped = get_grouped_slot_rects(state)
+            rects = grouped["rects"]
+            buttons = grouped["buttons"]
+
+            handled = False
+            # Check action buttons first
+            for (i, btn_rect, action) in buttons:
+                if btn_rect.collidepoint(mouse_x, mouse_y):
+                    item = state.inventory[i]
+                    if action == "use_potion":
+                        if item == "Speed Potion":
+                            player.speed = int(settings.PLAYER_BASE_SPEED * settings.SPEED_BOOST_MULT)
+                            state.inventory[i] = ""
+                        elif item == "Health Potion":
+                            player.potion_count += 1
+                            state.inventory[i] = ""
+                    elif action == "equip":
+                        equip_item_from_inventory(state, i)
+                    handled = True
                     break
+
+            if handled:
+                continue
+
+            # Only buttons trigger actions; clicking on item text does nothing
         if event.type == pygame.KEYDOWN and event.key == pygame.K_t:
             state.inventory_open = not state.inventory_open
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
             start_dodge(player)
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_j:
+            if player.bow_equipped and player.bow_cooldown <= 0 and player.health > 0:
+                dir_vec = pygame.Vector2(player.facing)
+                if dir_vec.length_squared() == 0:
+                    dir_vec = pygame.Vector2(1, 0)
+                dir_vec = dir_vec.normalize()
+                spawn_pos = player.pos + dir_vec * (settings.PLAYER_RADIUS + 10)
+                state.arrows.append(
+                    {
+                        "pos": spawn_pos,
+                        "dir": dir_vec,
+                    }
+                )
+                player.bow_cooldown = settings.BOW_COOLDOWN
         if event.type == pygame.KEYDOWN and event.key == pygame.K_m:
             if state.has_map:
                 state.map_open = not state.map_open
                 if state.map_open:
                     state.map_tested = True
+                    # If the player opens the map after the shopkeeper gave it,
+                    # show a short comment from the shopkeeper the first time.
+                    if state.shopkeeper_greeted and not state.map_comment_shown:
+                        state.map_comment_shown = True
+                        start_dialogue(
+                            state,
+                            [
+                                'Shopkeeper: "Hmm. It seems like your map has nothing on it. Yet."',
+                            ],
+                        )
                 else:
                     restore_dialogue(state)
                     if state.map_tested and state.shopkeeper_greeted and not state.rumor_shown:
@@ -392,7 +459,9 @@ def start_dodge(player):
 def update_game(state: GameState):
     player = state.player
     keys = pygame.key.get_pressed()
-    if state.map_open:
+    # Freeze world updates while the map or inventory is open so the player
+    # and enemies can't move or attack while managing inventory/map.
+    if state.map_open or getattr(state, "inventory_open", False):
         return
     if player.health > 0:
         move = pygame.Vector2(0, 0)
@@ -412,7 +481,10 @@ def update_game(state: GameState):
         else:
             if move.length_squared() > 0:
                 move = move.normalize()
-                player.pos += move * player.speed * state.dt
+                sprinting = keys[pygame.K_LSHIFT] and player.stamina > 0
+                player.is_sprinting = sprinting and move.length_squared() > 0
+                speed_mult = settings.SPRINT_SPEED_MULT if player.is_sprinting else 1.0
+                player.pos += move * player.speed * speed_mult * state.dt
 
         if player.knockback_timer > 0:
             player.pos += player.knockback_vec * (settings.KNOCKBACK_SPEED * state.dt)
@@ -421,7 +493,9 @@ def update_game(state: GameState):
         mouse_pos = pygame.Vector2(pygame.mouse.get_pos())
         to_mouse = mouse_pos - player.pos
         if to_mouse.length_squared() > 0:
-            player.facing = to_mouse.normalize()
+            target_facing = to_mouse.normalize()
+            # Smooth interpolation for reduced sensitivity (0.15 = 15% move towards target per frame)
+            player.facing = player.facing.lerp(target_facing, 0.15)
 
     for pig in state.pigs:
         if pig.health <= 0:
@@ -446,6 +520,17 @@ def update_game(state: GameState):
         player.swing_timer -= state.dt
     if player.cooldown > 0:
         player.cooldown -= state.dt
+    
+    # Re-enable shield if right-click is held and swing is done
+    keys = pygame.key.get_pressed()
+    mouse_buttons = pygame.mouse.get_pressed()
+    if mouse_buttons[2]:  # Right mouse button (index 2)
+        if player.health > 0 and player.shield_blocks_left > 0 and player.swing_timer <= 0:
+            player.is_blocking = True
+    if player.bow_cooldown > 0:
+        player.bow_cooldown -= state.dt
+        if player.bow_cooldown < 0:
+            player.bow_cooldown = 0
 
     for pig in state.pigs:
         if pig.swing_timer > 0:
@@ -463,6 +548,13 @@ def update_game(state: GameState):
             player.health = min(player.max_health, player.health + settings.POTION_HEAL)
             player.potion_count -= 1
             player.is_drinking_potion = False
+    # Stamina drain/regeneration
+    if getattr(player, "is_sprinting", False) and player.stamina > 0:
+        player.stamina = max(0.0, player.stamina - settings.STAMINA_USE_RATE * state.dt)
+        if player.stamina == 0:
+            player.is_sprinting = False
+    elif player.stamina < settings.STAMINA_MAX and not getattr(player, "is_sprinting", False):
+        player.stamina = min(settings.STAMINA_MAX, player.stamina + settings.STAMINA_REGEN_RATE * state.dt)
     if player.dodge_cooldown > 0:
         player.dodge_cooldown -= state.dt
         if player.dodge_cooldown < 0:
@@ -472,6 +564,29 @@ def update_game(state: GameState):
         state.shake_timer -= state.dt
         if state.shake_timer < 0:
             state.shake_timer = 0
+
+    # Move arrows and apply damage
+    if state.arrows:
+        remaining_arrows = []
+        for arrow in state.arrows:
+            arrow["pos"] = arrow["pos"] + arrow["dir"] * (settings.BOW_SPEED * state.dt)
+            pos = arrow["pos"]
+            if not (0 <= pos.x <= state.screen.get_width() and 0 <= pos.y <= state.screen.get_height()):
+                continue
+            hit = False
+            for pig in state.pigs:
+                if pig.health <= 0:
+                    continue
+                if (pig.pos - pos).length() <= settings.PIG_RADIUS:
+                    pig.health = max(0, pig.health - settings.BOW_DAMAGE)
+                    if pig.health == 0 and not pig.coin_dropped:
+                        state.coin_pickups.append({"pos": pig.pos.copy(), "value": settings.COIN_VALUE})
+                        pig.coin_dropped = True
+                    hit = True
+                    break
+            if not hit:
+                remaining_arrows.append(arrow)
+        state.arrows = remaining_arrows
 
     if state.blood_splats:
         keep = []
@@ -556,7 +671,7 @@ def update_game(state: GameState):
                     if player.shield_blocks_left <= 0:
                         player.is_blocking = False
                 else:
-                    if state.leather_armor_bought or player.armor_equipped:
+                    if player.armor_equipped:
                         dmg_to_player = int(dmg_to_player * 0.95)
                     player.health = max(0, player.health - dmg_to_player)
                     pig.swing_timer = 0
@@ -695,30 +810,161 @@ def draw_game(state: GameState):
     draw_coin_icon(screen, 124, 6, enabled=True)
     coins_text = state.font.render(f"x {state.coin_count}", True, (255, 255, 255))
     screen.blit(coins_text, (144, 6))
+    draw_player_stamina_bar_topleft(screen, player.stamina, settings.STAMINA_MAX, 10, 26)
 
     if player.health > 0:
-        move_speed = player.speed if player.health > 0 else 0
-        leg_swing = 0
-        if move_speed > 0 and (keys[pygame.K_w] or keys[pygame.K_a] or keys[pygame.K_s] or keys[pygame.K_d]):
-            leg_swing = int(18 * math.sin(pygame.time.get_ticks() * 0.008))
         p = player.pos
-        leg_len = settings.PLAYER_RADIUS + 18
-        pygame.draw.line(screen, (60, 0, 0), (int(p.x - 16), int(p.y + settings.PLAYER_RADIUS)), (int(p.x - 16 + leg_swing), int(p.y + leg_len)), 8)
-        pygame.draw.line(screen, (60, 0, 0), (int(p.x + 16), int(p.y + settings.PLAYER_RADIUS)), (int(p.x + 16 - leg_swing), int(p.y + leg_len)), 8)
-        body_color = (200, 80, 80) if player.is_dodging else "red"
-        pygame.draw.circle(screen, body_color, player.pos, settings.PLAYER_RADIUS)
-        if player.armor_equipped:
-            # Simple chest plate overlay
-            pygame.draw.circle(screen, (150, 90, 40), player.pos, settings.PLAYER_RADIUS - 6, 6)
-        if player.is_blocking:
-            pts = sword_polygon_points(
-                player.pos,
-                player.facing,
-                settings.SHIELD_DISTANCE,
-                settings.SHIELD_LENGTH,
-                settings.SHIELD_WIDTH,
+        hip_y = p.y + settings.PLAYER_RADIUS * 0.6
+        leg_len = settings.PLAYER_RADIUS + 12
+        leg_swing = 0
+        move_speed = player.speed if player.health > 0 else 0
+        keys_down = keys[pygame.K_w] or keys[pygame.K_a] or keys[pygame.K_s] or keys[pygame.K_d]
+        if move_speed > 0 and keys_down:
+            leg_swing = int(12 * math.sin(pygame.time.get_ticks() * 0.008))
+        pygame.draw.line(
+            screen,
+            (60, 0, 0),
+            (int(p.x - 14), int(hip_y)),
+            (int(p.x - 14 + leg_swing), int(hip_y + leg_len)),
+            8,
+        )
+        pygame.draw.line(
+            screen,
+            (60, 0, 0),
+            (int(p.x + 14), int(hip_y)),
+            (int(p.x + 14 - leg_swing), int(hip_y + leg_len)),
+            8,
+        )
+        attack_dir = (
+            get_swing_dir(player.swing_base_dir, player.swing_timer, settings.PLAYER_SWING_TIME, player.facing)
+            if player.swing_timer > 0
+            else (player.facing if player.facing.length_squared() > 0 else pygame.Vector2(1, 0))
+        )
+        base_body_color = (200, 80, 80)
+        if player.is_dodging:
+            base_body_color = (120, 200, 120)
+        head_center = (int(p.x), int(p.y - settings.PLAYER_RADIUS * 0.8))
+        head_radius = settings.PLAYER_RADIUS // 2
+        body_width = int(settings.PLAYER_RADIUS * 1.4)
+        body_height = int(settings.PLAYER_RADIUS * 1.8)
+        body_rect = pygame.Rect(
+            int(p.x - body_width // 2),
+            int(p.y - body_height // 2),
+            body_width,
+            body_height,
+        )
+        leg_center = (int(p.x), int(p.y + settings.PLAYER_RADIUS * 0.6))
+        leg_radius = settings.PLAYER_RADIUS // 2
+
+        head_color = (235, 205, 160) if player.head_item else (170, 170, 170)
+        body_color = (170, 70, 70) if not player.armor_equipped else (150, 100, 60)
+        leg_color = (110, 70, 60)
+        arm_color = (190, 120, 90)
+        arm_len = int(settings.PLAYER_SWING_DISTANCE * 0.8)
+        shoulder_y = body_rect.top + int(body_height * 0.2)
+        arm_x_offset = body_width // 2 - 4  # keep close to torso
+        arm_drop = settings.PLAYER_RADIUS * 0.05
+
+        arm_dir = pygame.Vector2(attack_dir).normalize()
+        arm_drop_vec = pygame.Vector2(0, arm_drop)
+
+        pygame.draw.circle(screen, leg_color, leg_center, leg_radius)
+        # Body with simple outline and trim
+        outline_rect = body_rect.inflate(6, 6)
+        pygame.draw.rect(screen, (60, 40, 40), outline_rect, border_radius=6)
+        pygame.draw.rect(screen, base_body_color, body_rect, border_radius=6)
+        inner_body = body_rect.inflate(-8, -8)
+        pygame.draw.rect(screen, body_color, inner_body, border_radius=4)
+        panel_rect = inner_body.inflate(
+            -int(inner_body.width * 0.35),
+            -int(inner_body.height * 0.2),
+        )
+        pygame.draw.rect(screen, (210, 160, 160) if not player.armor_equipped else (190, 150, 90), panel_rect, border_radius=4)
+        belt_rect = pygame.Rect(inner_body.left, inner_body.centery + 6, inner_body.width, 10)
+        pygame.draw.rect(screen, (60, 40, 20), belt_rect, border_radius=4)
+        hem_rect = pygame.Rect(inner_body.left, inner_body.bottom - 10, inner_body.width, 8)
+        pygame.draw.rect(screen, (80, 40, 40), hem_rect, border_radius=3)
+        pygame.draw.circle(screen, head_color, head_center, head_radius)
+
+        left_arm_start = pygame.Vector2(p.x - arm_x_offset, shoulder_y)
+        left_arm_end_vec = left_arm_start + pygame.Vector2(-arm_len * 0.5, arm_len * 0.7)  # diagonal arm sticks out
+        right_arm_start = pygame.Vector2(p.x + arm_x_offset, shoulder_y)
+        right_arm_end_vec = right_arm_start + arm_dir * arm_len + arm_drop_vec
+
+        pygame.draw.line(screen, arm_color, left_arm_start, left_arm_end_vec, 8)
+        pygame.draw.line(screen, arm_color, right_arm_start, right_arm_end_vec, 8)
+
+        # Weapon held in right hand (moves with arm/mouse)
+        sword_dir = arm_dir
+        grip_len = int(settings.SWORD_LENGTH * 0.3)
+        blade_len = int(settings.SWORD_LENGTH * 1.05) if player.swing_timer > 0 else settings.SWORD_LENGTH
+        grip_end = right_arm_end_vec + sword_dir * grip_len
+        blade_tip = grip_end + sword_dir * blade_len
+        cross_half = int(settings.SWORD_LENGTH * 0.18)
+        perp = pygame.Vector2(-sword_dir.y, sword_dir.x)
+        cross_left = grip_end + perp * cross_half
+        cross_right = grip_end - perp * cross_half
+
+        if player.bow_equipped and player.bow_cooldown > 0:
+            # Draw simple bow animation (empty triangle) while shooting
+            bow_base_left = right_arm_end_vec + perp * cross_half
+            bow_base_right = right_arm_end_vec - perp * cross_half
+            bow_tip = right_arm_end_vec + sword_dir * (settings.SWORD_LENGTH * 0.9)
+            pygame.draw.polygon(
+                screen,
+                (200, 200, 255),
+                [
+                    (int(bow_base_left.x), int(bow_base_left.y)),
+                    (int(bow_base_right.x), int(bow_base_right.y)),
+                    (int(bow_tip.x), int(bow_tip.y)),
+                ],
+                2,
             )
-            pygame.draw.polygon(screen, (120, 170, 255), pts)
+            pygame.draw.circle(screen, (80, 50, 30), right_arm_end_vec, 6)  # hand/pommel
+        else:
+            # Zelda-like sword visuals
+            pygame.draw.line(screen, (120, 80, 40), right_arm_end_vec, grip_end, 8)  # grip
+            pygame.draw.line(screen, (220, 180, 70), cross_left, cross_right, 6)  # crossguard
+            pygame.draw.line(screen, (180, 210, 255), grip_end, blade_tip, 8)  # blade
+            pygame.draw.circle(screen, (80, 50, 30), right_arm_end_vec, 6)  # pommel/hand
+        if player.armor_equipped:
+            # Simple chest plate overlay plus shoulder pads
+            pygame.draw.rect(screen, (200, 170, 90), inner_body.inflate(-10, -10), 4, border_radius=6)
+            pad_radius = 10
+            pad_offset = body_width // 2 - 6
+            pygame.draw.circle(screen, (180, 150, 80), (int(p.x - pad_offset), shoulder_y), pad_radius)
+            pygame.draw.circle(screen, (180, 150, 80), (int(p.x + pad_offset), shoulder_y), pad_radius)
+        else:
+            # Cloth collar/trim when not armored
+            collar = pygame.Rect(inner_body.left, inner_body.top - 6, inner_body.width, 8)
+            pygame.draw.rect(screen, (220, 200, 200), collar, border_radius=4)
+        if player.is_blocking:
+            # Shield on left arm - horizontal triangle on top, upside-down triangle on bottom
+            # Shield covers arm and part of body
+            # Move shield slightly toward the player's body center so it sits closer to torso
+            body_center = pygame.Vector2(p.x, p.y)
+            # shift fraction toward body (0.0 = at arm end, 1.0 = at body center)
+            shift_toward_body = 0.35
+            shield_start = left_arm_end_vec + (body_center - left_arm_end_vec) * shift_toward_body
+            shield_width = 30
+            shield_height = 90
+            
+            # Top triangle (horizontal isosceles - pointing left/outward)
+            top_left = shield_start + pygame.Vector2(-shield_width, 0)
+            top_right = shield_start + pygame.Vector2(shield_width, 0)
+            top_point = shield_start + pygame.Vector2(0, -shield_height * 0.3)
+            
+            # Bottom triangle (upside-down - pointing downward, longer)
+            bottom_left = shield_start + pygame.Vector2(-shield_width, 0)
+            bottom_right = shield_start + pygame.Vector2(shield_width, 0)
+            bottom_point = shield_start + pygame.Vector2(0, shield_height * 0.7)
+            
+            # Draw top triangle
+            pygame.draw.polygon(screen, (100, 150, 200), [top_point, top_left, top_right])
+            # Draw bottom triangle
+            pygame.draw.polygon(screen, (120, 170, 255), [bottom_left, bottom_right, bottom_point])
+            # Outline
+            pygame.draw.polygon(screen, (80, 120, 180), [top_point, top_left, bottom_left, bottom_point, bottom_right, top_right], 2)
 
     for coin in state.coin_pickups:
         cpos = coin["pos"]
@@ -763,23 +1009,26 @@ def draw_game(state: GameState):
 
         draw_health_bar_above(screen, pig.pos, pig.health, settings.PIG_MAX_HEALTH)
 
-    if player.health > 0:
-        player_draw_dir = (
-            get_swing_dir(player.swing_base_dir, player.swing_timer, settings.PLAYER_SWING_TIME, player.facing)
-            if player.swing_timer > 0
-            else player.facing
+    # Draw arrows
+    arrow_color = (240, 230, 200)
+    for arrow in state.arrows:
+        pos = arrow["pos"]
+        dir_vec = arrow["dir"]
+        tail = pos - dir_vec * 10
+        head = pos + dir_vec * 16
+        pygame.draw.line(screen, arrow_color, tail, head, 6)
+        perp = pygame.Vector2(-dir_vec.y, dir_vec.x) * 4
+        pygame.draw.polygon(
+            screen,
+            (200, 200, 255),
+            [
+                (head.x, head.y),
+                (head.x - dir_vec.x * 10 + perp.x, head.y - dir_vec.y * 10 + perp.y),
+                (head.x - dir_vec.x * 10 - perp.x, head.y - dir_vec.y * 10 - perp.y),
+            ],
         )
-        ps_pts = sword_polygon_points(
-            player.pos,
-            player_draw_dir,
-            settings.PLAYER_SWING_DISTANCE,
-            settings.SWORD_LENGTH,
-            settings.SWORD_WIDTH,
-        )
-        if player.swing_timer > 0:
-            pygame.draw.polygon(screen, (255, 220, 180), ps_pts)
-        else:
-            pygame.draw.polygon(screen, (200, 200, 200), ps_pts, 1)
+
+    # Player sword swing visuals are handled by the arm/sword drawing above; no extra hitbox polygon needed.
 
     if state.blood_splats:
         blood_color = (160, 0, 0)
@@ -793,7 +1042,7 @@ def draw_game(state: GameState):
     screen.blit(hud2, (10, 36))
     screen.blit(hud3, (10, 62))
 
-    if state.leather_armor_bought:
+    if player.body_item == "Leather Armor":
         armor_text = state.font.render("Leather Armor: 5% damage blocked", True, (200, 180, 120))
         screen.blit(armor_text, (10, 110))
     if state.has_map:
@@ -801,27 +1050,7 @@ def draw_game(state: GameState):
         screen.blit(map_text, (10, 158))
 
     if state.inventory_open:
-        inv_font = pygame.font.SysFont(None, 32)
-        inv_bg = (30, 30, 60)
-        slot_w, slot_h = 60, 60
-        margin = 10
-        inv_x = screen.get_width() // 2 - (slot_w * 5 + margin * 4) // 2
-        inv_y = 120
-        for i in range(settings.INVENTORY_SLOTS):
-            x = inv_x + i * (slot_w + margin)
-            y = inv_y
-            pygame.draw.rect(screen, inv_bg, (x, y, slot_w, slot_h))
-            pygame.draw.rect(screen, (200, 200, 255), (x, y, slot_w, slot_h), 2)
-            item = state.inventory[i]
-            if item == "Speed Potion":
-                draw_potion_icon(screen, x + slot_w // 2 - 7, y + slot_h // 2 - 14, enabled="speed")
-                label = inv_font.render("Speed", True, (120, 180, 255))
-                screen.blit(label, (x + 4, y + slot_h - 24))
-            elif item:
-                label = inv_font.render(item, True, (255, 255, 255))
-                screen.blit(label, (x + 4, y + slot_h // 2 - 8))
-            num = inv_font.render(str(i + 1), True, (180, 180, 180))
-            screen.blit(num, (x + slot_w - 18, y + slot_h - 28))
+        draw_inventory_panel(state)
 
     if player.shield_blocks_left == 0:
         warn = state.font.render("shield broken!", True, (255, 120, 120))
