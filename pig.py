@@ -11,21 +11,53 @@ import settings
 @dataclass
 class PigState:
     pos: pygame.Vector2
-    health: int = settings.PIG_MAX_HEALTH
+    max_health: int = settings.PIG_MAX_HEALTH
+    health: int | None = None
+    radius: int = settings.PIG_RADIUS
     facing: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(1, 0))
     swing_timer: float = 0.0
     cooldown: float = 0.0
+    attack_cooldown: float = settings.PIG_COOLDOWN
+    windup_time: float = settings.PIG_WINDUP_TIME
+    swing_time: float = settings.PIG_SWING_TIME
     knockback_timer: float = 0.0
     knockback_vec: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
     coin_dropped: bool = False
     swing_base_dir: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(1, 0))
     is_evil: bool = False
+    is_boss: bool = False
+    in_boss_arena: bool = False
     windup_timer: float = 0.0
     walk_cycle: float = 0.0
 
+    def __post_init__(self):
+        if self.health is None:
+            self.health = int(self.max_health)
 
-def make_pig(pos: pygame.Vector2, is_evil: bool = False) -> PigState:
-    return PigState(pos=pygame.Vector2(pos), is_evil=is_evil)
+
+def make_pig(
+    pos: pygame.Vector2,
+    *,
+    is_evil: bool = False,
+    max_health: int = settings.PIG_MAX_HEALTH,
+    radius: int = settings.PIG_RADIUS,
+    attack_cooldown: float = settings.PIG_COOLDOWN,
+    windup_time: float = settings.PIG_WINDUP_TIME,
+    swing_time: float = settings.PIG_SWING_TIME,
+    is_boss: bool = False,
+    in_boss_arena: bool = False,
+) -> PigState:
+    return PigState(
+        pos=pygame.Vector2(pos),
+        is_evil=is_evil,
+        max_health=max_health,
+        radius=radius,
+        attack_cooldown=attack_cooldown,
+        windup_time=windup_time,
+        swing_time=swing_time,
+        is_boss=is_boss,
+        in_boss_arena=in_boss_arena,
+    )
 
 
 def spawn_pigs(n: int, level_index: int, screen: pygame.Surface) -> List[PigState]:

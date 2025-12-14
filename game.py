@@ -16,6 +16,7 @@ from effects import spawn_blood_splatter
 from game_state import GameState, create_game_state
 from hud import (
     draw_coin_icon,
+    draw_boss_health_bar_bottom,
     draw_health_bar_above,
     draw_player_health_bar_topleft,
     draw_player_stamina_bar_topleft,
@@ -32,13 +33,21 @@ from inventory import (
     get_grouped_slot_rects,
 )
 from pig import spawn_pigs, make_pig
-from world import blit_field_environment, get_field_map_surface, get_room3_table_rect, get_shopkeeper_rect
+from world import (
+    blit_field_environment,
+    get_field_boss_arena_door_rect,
+    get_field_boss_arena_rect,
+    get_field_boss_arena_wall_rects,
+    get_field_house_solid_rects,
+    get_field_map_surface,
+    get_room3_table_rect,
+    get_shopkeeper_rect,
+)
 
 DIALOGUE_BOX_PADDING = 10
 DIALOGUE_BUTTON_PADDING = 10
 MAP_INTRO_LINE1 = "Shopkeeper: \"You look new. Here's a free map!\""
 MAP_INTRO_LINE2 = "Shopkeeper: \"Why don't you try and use it?\""
-MAP_EMPTY_LINE = 'Shopkeeper: "Hmm. It seems like there\'s nothing on it."'
 RUMOR_LINE1 = "Shopkeeper: \"Did you hear the rumor about the possessed creatures?\""
 RUMOR_LINE2 = "Shopkeeper: \"Mladlor, the evil king, has been turning good creatures bad.\""
 EVIL_LINE = "Shopkeeper: \"Hey, look! There's one right there!\""
@@ -48,8 +57,8 @@ SKILL_LINE = "Shopkeeper: \"I have never seen someone with your skill.\""
 OPEN_MAP_LINE = "Shopkeeper: \"Open the map next.\""
 TREASURE_LINE = "Shopkeeper: \"If you go to this point, there might be some loot you can claim.\""
 MONSTER_WARN_LINE = "Shopkeeper: \"But beware, there are lots of monsters there.\""
-ROOM3_FIELD_WIDTH = 3200
-ROOM3_FIELD_HEIGHT = 2400
+ROOM3_FIELD_WIDTH = 4500
+ROOM3_FIELD_HEIGHT = 3200
 FIELD_LEVEL = settings.FIELD_LEVEL_INDEX
 INTRO_LINE_DURATION = 2.0
 LOOT_REVEAL_TIME = 2.5
@@ -93,7 +102,51 @@ def apply_field_start_progress(state: GameState):
     state.treasure_hint_visible = True
     state.quest_explained = True
     state.pigs = []
+    state.boss_spawned = False
+    state.boss_defeated = False
+    state.boss_door_closed = False
     update_camera_follow(state)
+
+
+def spawn_pig_boss_encounter(state: GameState):
+    arena = get_field_boss_arena_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
+    thickness = 36
+    inner = arena.inflate(-thickness * 2 - 80, -thickness * 2 - 80)
+    inner.center = arena.center
+
+    boss_pos = pygame.Vector2(inner.centerx, inner.centery - 40)
+    boss = make_pig(
+        boss_pos,
+        max_health=settings.PIG_MAX_HEALTH * 10,
+        radius=int(settings.PIG_RADIUS * 1.85),
+        windup_time=settings.PIG_WINDUP_TIME * 1.6,
+        attack_cooldown=max(1.2, settings.PIG_COOLDOWN + 1.2),
+        is_boss=True,
+        in_boss_arena=True,
+    )
+
+    offsets = [(-160, 80), (160, 80), (-220, -60), (220, -60)]
+    minions = [
+        make_pig(
+            pygame.Vector2(boss_pos.x + dx, boss_pos.y + dy),
+            in_boss_arena=True,
+        )
+        for dx, dy in offsets
+    ]
+
+    state.pigs.extend([boss, *minions])
+    state.boss_spawned = True
+    state.boss_door_closed = True
+
+
+def start_field_intro(state: GameState):
+    """Begin the shopkeeper's initial field script (map intro)."""
+    if state.level_index != FIELD_LEVEL or state.shopkeeper_greeted:
+        return
+    state.shopkeeper_greeted = True
+    state.has_map = True
+    state.treasure_hint_visible = False
+    start_dialogue(state, [MAP_INTRO_LINE1, MAP_INTRO_LINE2])
 
 
 def push_circle_out_of_rect(pos: pygame.Vector2, radius: float, rect: pygame.Rect):
@@ -455,6 +508,9 @@ def reset_round(state: GameState):
     state.bow_given = False
     state.resume_lines = []
     state.resume_index = 0
+    state.boss_spawned = False
+    state.boss_defeated = False
+    state.boss_door_closed = False
 
     # Start position depends on level
     if state.level_index == FIELD_LEVEL:
@@ -463,6 +519,10 @@ def reset_round(state: GameState):
     else:
         player.pos.update(settings.SCREEN_WIDTH / 2, settings.SCREEN_HEIGHT / 2)
     update_camera_follow(state)
+
+    if state.level_index == FIELD_LEVEL and getattr(state, "auto_start_field_intro", False):
+        state.auto_start_field_intro = False
+        start_field_intro(state)
 
     state.coin_pickups.clear()
     state.blood_splats.clear()
@@ -587,7 +647,6 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                         start_dialogue(
                             state,
                             [
-                                MAP_EMPTY_LINE,
                                 RUMOR_LINE1,
                                 RUMOR_LINE2,
                                 EVIL_LINE,
@@ -819,11 +878,27 @@ def update_game(state: GameState):
             # Shopkeeper is also solid
             keeper_rect = get_shopkeeper_rect(state.screen)
             push_circle_out_of_rect(player.pos, settings.PLAYER_RADIUS, keeper_rect)
+            for house_rect in get_field_house_solid_rects(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT):
+                push_circle_out_of_rect(player.pos, settings.PLAYER_RADIUS, house_rect)
+
+            for wall_rect in get_field_boss_arena_wall_rects(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT):
+                push_circle_out_of_rect(player.pos, settings.PLAYER_RADIUS, wall_rect)
+            if getattr(state, "boss_door_closed", False):
+                push_circle_out_of_rect(
+                    player.pos,
+                    settings.PLAYER_RADIUS,
+                    get_field_boss_arena_door_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT),
+                )
 
         # Keep player inside the current world's bounds so they can't walk off-screen.
         world_w, world_h = current_world_size(state)
         player.pos.x = max(settings.PLAYER_RADIUS, min(player.pos.x, world_w - settings.PLAYER_RADIUS))
         player.pos.y = max(settings.PLAYER_RADIUS, min(player.pos.y, world_h - settings.PLAYER_RADIUS))
+
+        if state.level_index == FIELD_LEVEL:
+            arena = get_field_boss_arena_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
+            if arena.collidepoint(player.pos.x, player.pos.y) and not getattr(state, "boss_spawned", False):
+                spawn_pig_boss_encounter(state)
 
         # Aim either at lock-on target or mouse
         lock = state.lock_target if state.lock_target and state.lock_target.health > 0 else None
@@ -849,6 +924,14 @@ def update_game(state: GameState):
                 player.facing,
             )
 
+    arena_walls: list[pygame.Rect] = []
+    arena_door = pygame.Rect(0, 0, 0, 0)
+    boss_door_closed = False
+    if state.level_index == FIELD_LEVEL:
+        arena_walls = get_field_boss_arena_wall_rects(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
+        arena_door = get_field_boss_arena_door_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
+        boss_door_closed = getattr(state, "boss_door_closed", False)
+
     for pig in state.pigs:
         if pig.health <= 0:
             continue
@@ -857,7 +940,7 @@ def update_game(state: GameState):
         if dist > 0:
             pig.facing = to_player / dist
 
-        in_attack_range = dist < (settings.PIG_RADIUS + settings.PLAYER_RADIUS + settings.SWORD_LENGTH * 0.6)
+        in_attack_range = dist < (pig.radius + settings.PLAYER_RADIUS + settings.SWORD_LENGTH * 0.6)
         ready_to_attack = pig.cooldown <= 0 and pig.swing_timer <= 0 and pig.windup_timer <= 0
 
         if dist < state.chase_range and dist > 0 and pig.windup_timer <= 0 and pig.swing_timer <= 0:
@@ -865,12 +948,18 @@ def update_game(state: GameState):
             pig.pos += move_step
             pig.walk_cycle = (pig.walk_cycle + move_step.length() * 0.05) % (math.tau)
         if in_attack_range and ready_to_attack:
-            pig.windup_timer = settings.PIG_WINDUP_TIME
+            pig.windup_timer = pig.windup_time
             pig.swing_base_dir = pig.facing.copy()
 
         if pig.knockback_timer > 0:
             pig.pos += pig.knockback_vec * (settings.KNOCKBACK_SPEED * state.dt)
             pig.knockback_timer -= state.dt
+
+        if state.level_index == FIELD_LEVEL and pig.in_boss_arena:
+            for wall_rect in arena_walls:
+                push_circle_out_of_rect(pig.pos, pig.radius, wall_rect)
+            if boss_door_closed:
+                push_circle_out_of_rect(pig.pos, pig.radius, arena_door)
 
     if player.swing_timer > 0:
         prev_swing = player.swing_timer
@@ -897,13 +986,15 @@ def update_game(state: GameState):
             pig.windup_timer -= state.dt
             if pig.windup_timer <= 0:
                 pig.windup_timer = 0
-                pig.swing_timer = settings.PIG_SWING_TIME
-                pig.cooldown = settings.PIG_COOLDOWN
+                pig.swing_timer = pig.swing_time
                 pig.swing_base_dir = pig.facing.copy()
         if pig.swing_timer > 0:
+            prev = pig.swing_timer
             pig.swing_timer -= state.dt
             if pig.swing_timer < 0:
                 pig.swing_timer = 0
+            if prev > 0 and pig.swing_timer <= 0:
+                pig.cooldown = pig.attack_cooldown
         if pig.cooldown > 0:
             pig.cooldown -= state.dt
             if pig.cooldown < 0:
@@ -946,11 +1037,14 @@ def update_game(state: GameState):
             for pig in state.pigs:
                 if pig.health <= 0:
                     continue
-                if (pig.pos - pos).length() <= settings.PIG_RADIUS:
+                if (pig.pos - pos).length() <= pig.radius:
                     pig.health = max(0, pig.health - settings.BOW_DAMAGE)
                     if pig.health == 0 and not pig.coin_dropped:
                         state.coin_pickups.append({"pos": pig.pos.copy(), "value": settings.COIN_VALUE})
                         pig.coin_dropped = True
+                    if pig.health == 0 and pig.is_boss:
+                        state.boss_defeated = True
+                        state.boss_door_closed = False
                     hit = True
                     break
             if not hit:
@@ -980,7 +1074,7 @@ def update_game(state: GameState):
                 player.pos,
                 player_attack_dir,
                 pig.pos,
-                settings.PIG_RADIUS,
+                pig.radius,
                 player.swing_timer,
                 settings.PLAYER_SWING_TIME,
                 settings.PLAYER_DAMAGE,
@@ -993,7 +1087,7 @@ def update_game(state: GameState):
                 # Cancel any active attack when knocked back
                 pig.windup_timer = 0.0
                 pig.swing_timer = 0.0
-                pig.cooldown = settings.PIG_COOLDOWN
+                pig.cooldown = pig.attack_cooldown
                 player.swing_timer = 0
                 player.swing_recover_timer = settings.PLAYER_SWING_RECOVER_TIME
                 dir_vec = pig.pos - player.pos
@@ -1005,6 +1099,9 @@ def update_game(state: GameState):
                 if pig.health == 0 and not pig.coin_dropped:
                     state.coin_pickups.append({"pos": pig.pos.copy(), "value": settings.COIN_VALUE})
                     pig.coin_dropped = True
+                if pig.health == 0 and pig.is_boss:
+                    state.boss_defeated = True
+                    state.boss_door_closed = False
                 if pig.is_evil and not state.evil_defeated:
                     state.evil_defeated = True
 
@@ -1019,7 +1116,7 @@ def update_game(state: GameState):
             if pig.health <= 0:
                 continue
             pig_attack_dir = (
-                get_swing_dir(pig.swing_base_dir, pig.swing_timer, settings.PIG_SWING_TIME, pig.facing)
+                get_swing_dir(pig.swing_base_dir, pig.swing_timer, pig.swing_time, pig.facing)
                 if pig.swing_timer > 0
                 else pig.facing
             )
@@ -1029,7 +1126,7 @@ def update_game(state: GameState):
                 player.pos,
                 settings.PLAYER_RADIUS,
                 pig.swing_timer,
-                settings.PIG_SWING_TIME,
+                pig.swing_time,
                 settings.PIG_DAMAGE,
                 settings.PIG_SWING_DISTANCE,
                 settings.SWORD_LENGTH,
@@ -1046,6 +1143,7 @@ def update_game(state: GameState):
                         dmg_to_player = int(dmg_to_player * 0.95)
                     player.health = max(0, player.health - dmg_to_player)
                     pig.swing_timer = 0
+                    pig.cooldown = pig.attack_cooldown
                     dir_vec = player.pos - pig.pos
                     if dir_vec.length_squared() > 0:
                         player.knockback_vec = dir_vec.normalize()
@@ -1127,6 +1225,12 @@ def draw_game(state: GameState):
         pygame.draw.circle(screen, (240, 210, 180), head_center, 10)
         prompt = state.font.render('Click on me to talk', True, (255, 255, 200))
         screen.blit(prompt, (npc_rect.centerx - prompt.get_width() // 2, npc_rect.top - 26))
+
+        if getattr(state, "boss_door_closed", False):
+            boss_door_world = get_field_boss_arena_door_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
+            boss_door = boss_door_world.move(int(-cam.x), int(-cam.y))
+            pygame.draw.rect(screen, (90, 60, 20), boss_door)
+            pygame.draw.rect(screen, (180, 140, 60), boss_door, 3)
 
         icon_x = t_rect.centerx - 16
         icon_y = t_rect.centery - 16
@@ -1423,8 +1527,8 @@ def draw_game(state: GameState):
         pig_leg_swing = int(12 * math.sin(pig.walk_cycle)) if moving else 0
 
         # Body dimensions
-        body_w = int(settings.PIG_RADIUS * 1.8)
-        body_h = int(settings.PIG_RADIUS * 1.2)
+        body_w = int(pig.radius * 1.8)
+        body_h = int(pig.radius * 1.2)
         body_rect = pygame.Rect(int(pp.x - body_w / 2), int(pp.y - body_h / 2), body_w, body_h)
 
         PINK = (255, 160, 180)
@@ -1495,19 +1599,19 @@ def draw_game(state: GameState):
         # Legs
         leg_y = int(pp.y + body_h * 0.35)
         left_leg_start = (int(pp.x - body_w * 0.28), leg_y - 6)
-        left_leg_end = (int(pp.x - body_w * 0.28 + pig_leg_swing), int(leg_y + settings.PIG_RADIUS * 0.5))
+        left_leg_end = (int(pp.x - body_w * 0.28 + pig_leg_swing), int(leg_y + pig.radius * 0.5))
         right_leg_start = (int(pp.x + body_w * 0.28), leg_y - 6)
-        right_leg_end = (int(pp.x + body_w * 0.28 - pig_leg_swing), int(leg_y + settings.PIG_RADIUS * 0.5))
+        right_leg_end = (int(pp.x + body_w * 0.28 - pig_leg_swing), int(leg_y + pig.radius * 0.5))
         pygame.draw.line(screen, DARK_PINK, left_leg_start, left_leg_end, 8)
         pygame.draw.line(screen, DARK_PINK, right_leg_start, right_leg_end, 8)
 
         # Arms and sword
         pig_draw_dir = (
-            get_swing_dir(pig.swing_base_dir, pig.swing_timer, settings.PIG_SWING_TIME, pig.facing)
+            get_swing_dir(pig.swing_base_dir, pig.swing_timer, pig.swing_time, pig.facing)
             if pig.swing_timer > 0
             else pig.facing
         )
-        pig_swing_reach = swing_reach_multiplier(pig.swing_timer, settings.PIG_SWING_TIME) if pig.swing_timer > 0 else 1.0
+        pig_swing_reach = swing_reach_multiplier(pig.swing_timer, pig.swing_time) if pig.swing_timer > 0 else 1.0
         # Arm origin slightly above body center
         arm_origin = pp + pygame.Vector2(0, -body_h * 0.1)
         arm_len = int(settings.SWORD_LENGTH * 0.5 * pig_swing_reach)
@@ -1535,7 +1639,8 @@ def draw_game(state: GameState):
             pygame.draw.line(screen, (220, 180, 70), (int(cross_left.x), int(cross_left.y)), (int(cross_right.x), int(cross_right.y)), 4)
             pygame.draw.circle(screen, (80, 50, 30), (int(arm_origin.x), int(arm_origin.y)), 5)
 
-        draw_health_bar_above(screen, pp, pig.health, settings.PIG_MAX_HEALTH)
+        if not pig.is_boss:
+            draw_health_bar_above(screen, pp, pig.health, pig.max_health, radius=pig.radius)
 
     # Draw arrows
     arrow_color = (240, 230, 200)
@@ -1580,6 +1685,10 @@ def draw_game(state: GameState):
         quest_text = state.font.render("Quest: Find the treasure (press M)", True, (255, 240, 150))
         screen.blit(quest_text, (10, 184))
 
+    boss = next((p for p in state.pigs if getattr(p, "is_boss", False) and p.health > 0), None)
+    if boss is not None and state.font is not None:
+        draw_boss_health_bar_bottom(screen, state.font, "Pig Boss", boss.health, boss.max_health)
+
     if state.inventory_open:
         draw_inventory_panel(state)
 
@@ -1597,8 +1706,8 @@ def draw_game(state: GameState):
         pygame.draw.rect(screen, (28, 34, 48), full_rect)  # dark but not gloomy
         pygame.draw.rect(screen, (90, 120, 150), full_rect, 6)
 
-        map_w = int(full_rect.width * 0.74)
-        map_h = int(full_rect.height * 0.74)
+        map_w = int(full_rect.width * 0.86)
+        map_h = int(full_rect.height * 0.86)
         map_rect = pygame.Rect(0, 0, map_w, map_h)
         map_rect.center = full_rect.center
         pygame.draw.rect(screen, (40, 52, 70), map_rect, border_radius=12)
@@ -1655,8 +1764,7 @@ def draw_game(state: GameState):
             pygame.draw.circle(screen, quest_fill, (int(quest_pos.x), int(quest_pos.y)), 8)
             pygame.draw.circle(screen, quest_outline, (int(quest_pos.x), int(quest_pos.y)), 8, 2)
         else:
-            empty_text = state.font.render(MAP_EMPTY_LINE, True, (220, 230, 240))
-            screen.blit(empty_text, (map_rect.left + 12, map_rect.top + 52))
+            pass
 
         title = state.font.render("Map", True, (230, 240, 255))
         screen.blit(title, (map_rect.left + 12, map_rect.top + 12))
@@ -1674,7 +1782,6 @@ def run():
     state = create_game_state(screen)
     if not state.intro_active:
         reset_round(state)
-        apply_field_start_progress(state)
 
     while state.running:
         events = pygame.event.get()

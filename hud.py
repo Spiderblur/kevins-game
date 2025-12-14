@@ -19,15 +19,39 @@ def draw_player_stamina_bar_topleft(screen: pygame.Surface, current: float, maxi
     pygame.draw.rect(screen, (50, 200, 80), (x, y, int(bar_width * ratio), bar_height))
 
 
-def draw_health_bar_above(screen: pygame.Surface, center_pos: pygame.Vector2, current: int, maximum: int):
+def draw_health_bar_above(screen: pygame.Surface, center_pos: pygame.Vector2, current: int, maximum: int, radius: int = settings.PIG_RADIUS):
     bar_width = 80
     bar_height = 10
     x = center_pos.x - bar_width // 2
-    y = center_pos.y - (settings.PIG_RADIUS + 28)
+    y = center_pos.y - (radius + 28)
     pygame.draw.rect(screen, (100, 100, 100), (x, y, bar_width, bar_height))
     ratio = max(0, current) / maximum if maximum > 0 else 0
     pygame.draw.rect(screen, (255, 0, 0), (x, y, int(bar_width * ratio), bar_height))
 
+
+def draw_boss_health_bar_bottom(
+    screen: pygame.Surface,
+    font: pygame.font.Font,
+    label: str,
+    current: int,
+    maximum: int,
+):
+    pad = 12
+    bar_w = int(screen.get_width() * 0.62)
+    bar_h = 18
+    x = (screen.get_width() - bar_w) // 2
+    y = screen.get_height() - bar_h - 22
+
+    back = pygame.Rect(x, y, bar_w, bar_h)
+    pygame.draw.rect(screen, (30, 30, 30), back, border_radius=8)
+    pygame.draw.rect(screen, (160, 160, 160), back, 2, border_radius=8)
+
+    ratio = max(0, current) / maximum if maximum > 0 else 0
+    fill = pygame.Rect(x + 2, y + 2, int((bar_w - 4) * ratio), bar_h - 4)
+    pygame.draw.rect(screen, (220, 60, 60), fill, border_radius=6)
+
+    text = font.render(label, True, (240, 240, 240))
+    screen.blit(text, (x, y - text.get_height() - pad))
 
 def draw_coin_icon(screen: pygame.Surface, x: int, y: int, enabled=True):
     outline = (90, 70, 0)

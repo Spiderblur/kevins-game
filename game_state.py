@@ -53,6 +53,7 @@ class GameState:
     auto_open_map_after_dialogue: bool = False
     treasure_hint_visible: bool = False
     quest_explained: bool = False
+    auto_start_field_intro: bool = False
     intro_active: bool = True
     intro_lines: list[str] = field(default_factory=list)
     intro_durations: list[float] = field(default_factory=list)
@@ -78,19 +79,17 @@ def create_game_state(screen: pygame.Surface) -> GameState:
     state.intro_durations = [2.5, 2.5, 2.5, 2.5]
     state.intro_line_start = pygame.time.get_ticks() / 1000.0
 
-    # Debug start: skip intro and begin in the field with progress.
+    # Debug start: skip story intro and begin at the start of the field intro.
     state.intro_active = False
     state.level_index = settings.FIELD_LEVEL_INDEX
-    state.coin_count = 50
-    state.has_map = True
-    state.shopkeeper_greeted = True
-    # Give the player basic gear + bow.
-    starter = ["Sword", "Shield", "Bow", "Health Potion"]
+    state.coin_count = 0
+    state.auto_start_field_intro = True
+    # Give the player basic gear.
+    starter = ["Sword", "Shield", "Health Potion"]
     for i, item in enumerate(starter):
         if i < len(state.inventory):
             state.inventory[i] = item
     state.player.weapon_item = "Sword"
     state.player.shield_item = "Shield"
-    state.player.bow_equipped = True
     state.player.potion_count = 1
     return state

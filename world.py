@@ -11,6 +11,15 @@ import settings
 _FIELD_ENV_CACHE: dict[tuple[int, int], pygame.Surface] = {}
 _FIELD_MAP_CACHE: dict[tuple[int, int, int, int], pygame.Surface] = {}
 
+ENV_MARGIN = 24
+
+
+def _clamp_rect_in_bounds(rect: pygame.Rect, width: int, height: int, margin: int = ENV_MARGIN) -> pygame.Rect:
+    rect = rect.copy()
+    rect.x = max(margin, min(rect.x, width - rect.width - margin))
+    rect.y = max(margin, min(rect.y, height - rect.height - margin))
+    return rect
+
 
 def _draw_road(surface: pygame.Surface, rect: pygame.Rect):
     road_fill = (196, 170, 110)
@@ -76,6 +85,71 @@ def _draw_tree(surface: pygame.Surface, center: pygame.Vector2, size: int):
     pygame.draw.circle(surface, (20, 90, 40), (int(center.x + size * 0.18), int(center.y + size * 0.08)), int(size * 0.26), 2)
 
 
+def get_field_house_rects(field_width: int, field_height: int) -> list[pygame.Rect]:
+    """House footprint rects in field world coordinates (solid)."""
+    shop_x = int(settings.SCREEN_WIDTH * 0.12)
+    shop_y = int(settings.SCREEN_HEIGHT * 0.60)
+
+    houses = [
+        pygame.Rect(shop_x + 260, shop_y - 320, 120, 110),
+        pygame.Rect(shop_x + 560, shop_y - 220, 130, 120),
+        pygame.Rect(shop_x + 300, shop_y - 120, 120, 110),
+    ]
+    return [_clamp_rect_in_bounds(r, field_width, field_height) for r in houses]
+
+
+def get_field_house_solid_rects(field_width: int, field_height: int) -> list[pygame.Rect]:
+    """Solid collision rects for houses, including roof overhang."""
+    solids: list[pygame.Rect] = []
+    for house in get_field_house_rects(field_width, field_height):
+        roof_h = int(house.height * 0.55)
+        roof_bounds = pygame.Rect(house.left - 12, house.top - roof_h - 6, house.width + 24, roof_h + 18)
+        solid = house.union(roof_bounds)
+        solids.append(_clamp_rect_in_bounds(solid, field_width, field_height))
+    return solids
+
+
+def get_field_boss_arena_rect(field_width: int, field_height: int) -> pygame.Rect:
+    center = (int(field_width * 0.85), int(field_height * 0.25))
+    arena = pygame.Rect(0, 0, 980, 720)
+    arena.center = center
+    return _clamp_rect_in_bounds(arena, field_width, field_height, margin=ENV_MARGIN)
+
+
+def get_field_boss_arena_wall_rects(field_width: int, field_height: int) -> list[pygame.Rect]:
+    arena = get_field_boss_arena_rect(field_width, field_height)
+    thickness = 36
+    door_w = 220
+    door_w = min(door_w, arena.width - thickness * 2 - 80)
+    half_gap = door_w // 2
+
+    top = pygame.Rect(arena.left, arena.top, arena.width, thickness)
+    left = pygame.Rect(arena.left, arena.top, thickness, arena.height)
+    right = pygame.Rect(arena.right - thickness, arena.top, thickness, arena.height)
+
+    bottom_y = arena.bottom - thickness
+    gap_left = arena.centerx - half_gap
+    gap_right = arena.centerx + half_gap
+    bottom_left = pygame.Rect(arena.left, bottom_y, max(0, gap_left - arena.left), thickness)
+    bottom_right = pygame.Rect(gap_right, bottom_y, max(0, arena.right - gap_right), thickness)
+    walls = [top, left, right]
+    if bottom_left.width > 0:
+        walls.append(bottom_left)
+    if bottom_right.width > 0:
+        walls.append(bottom_right)
+    return walls
+
+
+def get_field_boss_arena_door_rect(field_width: int, field_height: int) -> pygame.Rect:
+    arena = get_field_boss_arena_rect(field_width, field_height)
+    thickness = 36
+    door_w = 220
+    door_w = min(door_w, arena.width - thickness * 2 - 80)
+    door = pygame.Rect(0, 0, door_w, thickness)
+    door.midtop = (arena.centerx, arena.bottom - thickness)
+    return door
+
+
 def build_field_environment_surface(field_width: int, field_height: int) -> pygame.Surface:
     """Build a Zelda-ish overworld environment surface (world space) for the field level."""
     surface = pygame.Surface((field_width, field_height))
@@ -100,24 +174,43 @@ def build_field_environment_surface(field_width: int, field_height: int) -> pyga
     # Shopkeeper/table area (matches game.get_room3_table_rect positioning)
     shop_x = int(settings.SCREEN_WIDTH * 0.12)
     shop_y = int(settings.SCREEN_HEIGHT * 0.60)
-    plaza = pygame.Rect(shop_x - 220, shop_y - 220, 520, 380)
-    pygame.draw.rect(surface, (130, 130, 140), plaza, border_radius=10)
-    pygame.draw.rect(surface, (80, 80, 90), plaza, 6, border_radius=10)
+    house_rects = get_field_house_rects(field_width, field_height)
+
+    plaza = _clamp_rect_in_bounds(pygame.Rect(shop_x - 260, shop_y - 260, 620, 460), field_width, field_height)
+    for r in house_rects:
+        plaza = plaza.union(r.inflate(160, 160))
+    plaza = _clamp_rect_in_bounds(plaza, field_width, field_height)
+    pygame.draw.rect(surface, (130, 130, 140), plaza, border_radius=12)
+    pygame.draw.rect(surface, (80, 80, 90), plaza, 6, border_radius=12)
     # Path that connects the shop plaza to the main road
-    lane = pygame.Rect(shop_x - road_w // 2, shop_y, road_w, main_h.centery - shop_y + road_w // 2)
+    lane = _clamp_rect_in_bounds(
+        pygame.Rect(shop_x - road_w // 2, shop_y, road_w, main_h.centery - shop_y + road_w // 2),
+        field_width,
+        field_height,
+        margin=0,
+    )
     _draw_road(surface, lane)
-    lane_join = pygame.Rect(0, main_h.top, int(field_width * 0.22), main_h.height)
+    lane_join = _clamp_rect_in_bounds(pygame.Rect(0, main_h.top, int(field_width * 0.22), main_h.height), field_width, field_height, margin=0)
     _draw_road(surface, lane_join)
 
     # Village cluster near the shop plaza
-    houses = [
-        pygame.Rect(shop_x + 180, shop_y - 190, 150, 130),
-        pygame.Rect(shop_x + 330, shop_y - 40, 170, 150),
-        pygame.Rect(shop_x - 200, shop_y - 40, 150, 130),
-    ]
-    for i, r in enumerate(houses):
+    for i, r in enumerate(house_rects):
         roof = (160, 80, 80) if i % 2 == 0 else (140, 90, 60)
         _draw_house(surface, r, roof_color=roof)
+
+    # Boss arena near the quest point (0.85, 0.25) - large enclosed yard with a door opening.
+    arena = get_field_boss_arena_rect(field_width, field_height)
+    yard = arena.inflate(-72, -72)
+    pygame.draw.rect(surface, (70, 90, 75), yard, border_radius=18)
+    pygame.draw.rect(surface, (55, 70, 60), yard, 3, border_radius=18)
+    wall_fill = (130, 130, 140)
+    wall_edge = (80, 80, 90)
+    for wall in get_field_boss_arena_wall_rects(field_width, field_height):
+        pygame.draw.rect(surface, wall_fill, wall)
+        pygame.draw.rect(surface, wall_edge, wall, 4)
+    # Door frame at the opening
+    door = get_field_boss_arena_door_rect(field_width, field_height)
+    pygame.draw.rect(surface, wall_edge, door.inflate(12, 8), 3)
 
     # Farm fields to the south-east
     farms = [
@@ -135,7 +228,9 @@ def build_field_environment_surface(field_width: int, field_height: int) -> pyga
 
     # Decorative trees and shrubs (deterministic)
     rng = random.Random(1337)
-    for _ in range(160):
+    density = (field_width * field_height) / (3200 * 2400)
+    tree_count = max(160, int(160 * density))
+    for _ in range(tree_count):
         x = rng.randrange(0, field_width)
         y = rng.randrange(0, field_height)
         # Keep trees away from road corridors
@@ -143,6 +238,8 @@ def build_field_environment_surface(field_width: int, field_height: int) -> pyga
             continue
         # Avoid pond and key areas
         if pond_rect.collidepoint(x, y):
+            continue
+        if arena.inflate(120, 120).collidepoint(x, y):
             continue
         if plaza.collidepoint(x, y) or lane.collidepoint(x, y) or lane_join.collidepoint(x, y):
             continue
@@ -194,7 +291,7 @@ def blit_field_environment(screen: pygame.Surface, cam: pygame.Vector2, field_wi
     screen.blit(env, (-int(cam.x), -int(cam.y)))
 
 
-def draw_background(screen: pygame.Surface, cam_offset: pygame.Vector2, level_index: int, field_width=3200, field_height=2400):
+def draw_background(screen: pygame.Surface, cam_offset: pygame.Vector2, level_index: int, field_width=4500, field_height=3200):
     """Legacy helper; prefer blit_field_environment for the field."""
     if level_index == settings.FIELD_LEVEL_INDEX:
         blit_field_environment(screen, cam_offset, field_width, field_height)
