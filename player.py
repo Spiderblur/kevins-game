@@ -22,7 +22,7 @@ class PlayerState:
     shield_blocks_left: int = settings.SHIELD_MAX_BLOCKS
     is_drinking_potion: bool = False
     potion_timer: float = 0.0
-    potion_count: int = settings.START_POTION_COUNT
+    potion_count: int = 0
     knockback_timer: float = 0.0
     knockback_vec: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
     armor_equipped: bool = False
@@ -32,14 +32,19 @@ class PlayerState:
     dodge_cooldown: float = 0.0
     dodge_dir: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(1, 0))
     # Equipment slots
-    head_item: str = "Traveler Hood"
-    body_item: str = "Cloth Tunic"
-    legs_item: str = "Traveler Pants"
+    head_item: str = ""
+    body_item: str = ""
+    legs_item: str = ""
     weapon_item: str = ""
+    shield_item: str = ""
     bow_equipped: bool = False
     bow_cooldown: float = 0.0
     stamina: float = settings.STAMINA_MAX
     is_sprinting: bool = False
+    swing_recover_timer: float = 0.0
+    last_attack_dir: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(1, 0))
+    last_swing_reach: float = 1.0
+    shield_anchor_offset: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
 
 
 def create_player(start_pos: pygame.Vector2) -> PlayerState:

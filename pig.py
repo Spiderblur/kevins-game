@@ -20,6 +20,8 @@ class PigState:
     coin_dropped: bool = False
     swing_base_dir: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(1, 0))
     is_evil: bool = False
+    windup_timer: float = 0.0
+    walk_cycle: float = 0.0
 
 
 def make_pig(pos: pygame.Vector2, is_evil: bool = False) -> PigState:
@@ -32,7 +34,7 @@ def spawn_pigs(n: int, level_index: int, screen: pygame.Surface) -> List[PigStat
     center_y = screen.get_height() / 2
     start_y = center_y - (spacing * (n - 1) / 2)
     base_x = screen.get_width() / 4
-    if level_index == 2:
+    if level_index >= 3:
         base_x += 220
     for i in range(n):
         y = start_y + i * spacing

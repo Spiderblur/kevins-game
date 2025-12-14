@@ -1,32 +1,203 @@
+from __future__ import annotations
+
+import random
+from typing import Tuple
+
 import pygame
 
 import settings
 
 
+_FIELD_ENV_CACHE: dict[tuple[int, int], pygame.Surface] = {}
+_FIELD_MAP_CACHE: dict[tuple[int, int, int, int], pygame.Surface] = {}
+
+
+def _draw_road(surface: pygame.Surface, rect: pygame.Rect):
+    road_fill = (196, 170, 110)
+    road_edge = (130, 110, 70)
+    pygame.draw.rect(surface, road_fill, rect)
+    pygame.draw.rect(surface, road_edge, rect, 6)
+    # light center stripe
+    inner = rect.inflate(-24, -24)
+    if inner.width > 0 and inner.height > 0:
+        pygame.draw.rect(surface, (210, 190, 135), inner, 2)
+
+
+def _draw_house(surface: pygame.Surface, rect: pygame.Rect, roof_color=(150, 70, 70)):
+    wall = (200, 190, 150)
+    outline = (70, 60, 40)
+    pygame.draw.rect(surface, wall, rect, border_radius=8)
+    pygame.draw.rect(surface, outline, rect, 4, border_radius=8)
+
+    roof_h = int(rect.height * 0.55)
+    roof = [
+        (rect.left - 10, rect.top + 8),
+        (rect.centerx, rect.top - roof_h),
+        (rect.right + 10, rect.top + 8),
+    ]
+    pygame.draw.polygon(surface, roof_color, roof)
+    pygame.draw.polygon(surface, outline, roof, 4)
+
+    door = pygame.Rect(0, 0, int(rect.width * 0.18), int(rect.height * 0.42))
+    door.midbottom = (rect.centerx, rect.bottom - 6)
+    pygame.draw.rect(surface, (120, 80, 40), door, border_radius=4)
+    pygame.draw.rect(surface, outline, door, 3, border_radius=4)
+    pygame.draw.circle(surface, (230, 210, 120), (door.right - 8, door.centery), 4)
+
+    win_w = int(rect.width * 0.18)
+    win_h = int(rect.height * 0.18)
+    for sx in (-1, 1):
+        win = pygame.Rect(0, 0, win_w, win_h)
+        win.center = (rect.centerx + sx * int(rect.width * 0.22), rect.centery - int(rect.height * 0.10))
+        pygame.draw.rect(surface, (120, 170, 210), win, border_radius=3)
+        pygame.draw.rect(surface, outline, win, 2, border_radius=3)
+        pygame.draw.line(surface, outline, (win.centerx, win.top + 2), (win.centerx, win.bottom - 2), 2)
+        pygame.draw.line(surface, outline, (win.left + 2, win.centery), (win.right - 2, win.centery), 2)
+
+
+def _draw_farm(surface: pygame.Surface, rect: pygame.Rect):
+    soil = (70, 120, 60)
+    fence = (120, 90, 50)
+    outline = (60, 40, 20)
+    pygame.draw.rect(surface, soil, rect, border_radius=6)
+    pygame.draw.rect(surface, fence, rect, 4, border_radius=6)
+    pygame.draw.rect(surface, outline, rect, 2, border_radius=6)
+    # crop rows
+    row_color = (90, 150, 70)
+    for x in range(rect.left + 14, rect.right - 14, 18):
+        pygame.draw.line(surface, row_color, (x, rect.top + 10), (x, rect.bottom - 10), 2)
+
+
+def _draw_tree(surface: pygame.Surface, center: pygame.Vector2, size: int):
+    trunk = pygame.Rect(int(center.x - size * 0.12), int(center.y + size * 0.10), int(size * 0.24), int(size * 0.40))
+    pygame.draw.rect(surface, (90, 60, 30), trunk, border_radius=4)
+    pygame.draw.circle(surface, (30, 120, 50), (int(center.x), int(center.y)), int(size * 0.55))
+    pygame.draw.circle(surface, (50, 160, 70), (int(center.x - size * 0.15), int(center.y - size * 0.15)), int(size * 0.22))
+    pygame.draw.circle(surface, (20, 90, 40), (int(center.x + size * 0.18), int(center.y + size * 0.08)), int(size * 0.26), 2)
+
+
+def build_field_environment_surface(field_width: int, field_height: int) -> pygame.Surface:
+    """Build a Zelda-ish overworld environment surface (world space) for the field level."""
+    surface = pygame.Surface((field_width, field_height))
+
+    grass_base = (58, 145, 62)
+    grass_light = (76, 175, 80)
+    surface.fill(grass_base)
+
+    # Subtle horizontal stripes to mimic tile variation
+    stripe_h = 10
+    step = 40
+    for yy in range(0, field_height, step):
+        pygame.draw.rect(surface, grass_light, pygame.Rect(0, yy, field_width, stripe_h))
+
+    # Main roads
+    road_w = 120
+    main_h = pygame.Rect(0, int(field_height * 0.58 - road_w / 2), field_width, road_w)
+    main_v = pygame.Rect(int(field_width * 0.34 - road_w / 2), 0, road_w, field_height)
+    _draw_road(surface, main_h)
+    _draw_road(surface, main_v)
+
+    # Shopkeeper/table area (matches game.get_room3_table_rect positioning)
+    shop_x = int(settings.SCREEN_WIDTH * 0.12)
+    shop_y = int(settings.SCREEN_HEIGHT * 0.60)
+    plaza = pygame.Rect(shop_x - 220, shop_y - 220, 520, 380)
+    pygame.draw.rect(surface, (130, 130, 140), plaza, border_radius=10)
+    pygame.draw.rect(surface, (80, 80, 90), plaza, 6, border_radius=10)
+    # Path that connects the shop plaza to the main road
+    lane = pygame.Rect(shop_x - road_w // 2, shop_y, road_w, main_h.centery - shop_y + road_w // 2)
+    _draw_road(surface, lane)
+    lane_join = pygame.Rect(0, main_h.top, int(field_width * 0.22), main_h.height)
+    _draw_road(surface, lane_join)
+
+    # Village cluster near the shop plaza
+    houses = [
+        pygame.Rect(shop_x + 180, shop_y - 190, 150, 130),
+        pygame.Rect(shop_x + 330, shop_y - 40, 170, 150),
+        pygame.Rect(shop_x - 200, shop_y - 40, 150, 130),
+    ]
+    for i, r in enumerate(houses):
+        roof = (160, 80, 80) if i % 2 == 0 else (140, 90, 60)
+        _draw_house(surface, r, roof_color=roof)
+
+    # Farm fields to the south-east
+    farms = [
+        pygame.Rect(int(field_width * 0.52), int(field_height * 0.72), 360, 240),
+        pygame.Rect(int(field_width * 0.72), int(field_height * 0.68), 380, 260),
+    ]
+    for r in farms:
+        _draw_farm(surface, r)
+
+    # Small pond to break up the grass
+    pond_rect = pygame.Rect(int(field_width * 0.62), int(field_height * 0.32), 420, 260)
+    pygame.draw.ellipse(surface, (40, 110, 170), pond_rect)
+    pygame.draw.ellipse(surface, (170, 220, 255), pond_rect.inflate(-18, -18), 4)
+    pygame.draw.ellipse(surface, (20, 70, 120), pond_rect, 4)
+
+    # Decorative trees and shrubs (deterministic)
+    rng = random.Random(1337)
+    for _ in range(160):
+        x = rng.randrange(0, field_width)
+        y = rng.randrange(0, field_height)
+        # Keep trees away from road corridors
+        if abs(y - main_h.centery) < 120 or abs(x - main_v.centerx) < 120:
+            continue
+        # Avoid pond and key areas
+        if pond_rect.collidepoint(x, y):
+            continue
+        if plaza.collidepoint(x, y) or lane.collidepoint(x, y) or lane_join.collidepoint(x, y):
+            continue
+        size = rng.randrange(26, 52)
+        _draw_tree(surface, pygame.Vector2(x, y), size)
+
+    # A few rock clusters
+    rock_color = (120, 120, 120)
+    rock_shadow = (80, 80, 80)
+    rocks = [
+        (field_width * 0.18, field_height * 0.25),
+        (field_width * 0.86, field_height * 0.86),
+        (field_width * 0.44, field_height * 0.18),
+        (field_width * 0.78, field_height * 0.46),
+        (field_width * 0.58, field_height * 0.86),
+    ]
+    for rx, ry in rocks:
+        pygame.draw.circle(surface, rock_shadow, (int(rx + 10), int(ry + 10)), 26)
+        pygame.draw.circle(surface, rock_color, (int(rx), int(ry)), 26)
+        pygame.draw.circle(surface, (180, 180, 180), (int(rx - 8), int(ry - 10)), 10)
+
+    return surface
+
+
+def get_field_environment_surface(field_width: int, field_height: int) -> pygame.Surface:
+    key = (field_width, field_height)
+    env = _FIELD_ENV_CACHE.get(key)
+    if env is None:
+        env = build_field_environment_surface(field_width, field_height)
+        _FIELD_ENV_CACHE[key] = env
+        _FIELD_MAP_CACHE.clear()
+    return env
+
+
+def get_field_map_surface(target_size: tuple[int, int], field_width: int, field_height: int) -> pygame.Surface:
+    """Scaled 'image' of the environment for the map overlay."""
+    key = (target_size[0], target_size[1], field_width, field_height)
+    cached = _FIELD_MAP_CACHE.get(key)
+    if cached is not None:
+        return cached
+    env = get_field_environment_surface(field_width, field_height)
+    scaled = pygame.transform.smoothscale(env, target_size)
+    _FIELD_MAP_CACHE[key] = scaled
+    return scaled
+
+
+def blit_field_environment(screen: pygame.Surface, cam: pygame.Vector2, field_width: int, field_height: int):
+    env = get_field_environment_surface(field_width, field_height)
+    screen.blit(env, (-int(cam.x), -int(cam.y)))
+
+
 def draw_background(screen: pygame.Surface, cam_offset: pygame.Vector2, level_index: int, field_width=3200, field_height=2400):
-    if level_index == 3:
-        grass_base = (58, 145, 62)
-        grass_light = (76, 175, 80)
-        pad = 60
-        bg_rect = pygame.Rect(
-            -pad + int(cam_offset.x),
-            -pad + int(cam_offset.y),
-            field_width + pad * 2,
-            field_height + pad * 2,
-        )
-        pygame.draw.rect(screen, grass_base, bg_rect)
-        stripe_h = 12
-        step = 44
-        y_start = -pad
-        y_end = field_height + pad
-        for yy in range(y_start, y_end, step):
-            stripe = pygame.Rect(
-                -pad + int(cam_offset.x),
-                yy + int(cam_offset.y),
-                field_width + pad * 2,
-                stripe_h,
-            )
-            pygame.draw.rect(screen, grass_light, stripe)
+    """Legacy helper; prefer blit_field_environment for the field."""
+    if level_index == settings.FIELD_LEVEL_INDEX:
+        blit_field_environment(screen, cam_offset, field_width, field_height)
     else:
         screen.fill("purple")
 

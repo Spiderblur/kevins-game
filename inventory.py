@@ -19,7 +19,8 @@ EQUIPMENT_SLOT_MAP = {
     "Leather Armor": "body",
     "Traveler Pants": "legs",
     "Runner Boots": "legs",
-    "Sword": "weapon",
+        "Sword": "weapon",
+        "Shield": "shield",
 }
 ARMOR_ITEMS = {"Leather Armor"}
 
@@ -70,34 +71,31 @@ def equip_item_from_inventory(state: GameState, slot_index: int) -> bool:
         player.bow_equipped = not player.bow_equipped
         return True
     
+    # Handle Speed Potion as a special toggle (equip/unequip)
+    if item == "Speed Potion":
+        player.speed_potion_equipped = not getattr(player, "speed_potion_equipped", False)
+        return True
+    
     equip_slot = EQUIPMENT_SLOT_MAP.get(item)
     if not equip_slot:
         return False
     attr = f"{equip_slot}_item"
     current_equipped = getattr(player, attr, "")
     
-    # If already equipped, unequip it
+    # If already equipped, unequip it (item stays in inventory)
     if current_equipped == item:
         setattr(player, attr, "")
-        state.inventory[slot_index] = item
         apply_equipment_effects(player)
         return True
     
-    # Otherwise, equip it and swap the old item back to inventory
-    state.inventory[slot_index] = current_equipped if current_equipped else ""
+    # Equip this item, replacing any currently equipped item in that slot
     setattr(player, attr, item)
     apply_equipment_effects(player)
     return True
 
 
 def ensure_default_equipment(player: PlayerState):
-    """Make sure the player always has named items in each slot."""
-    if not getattr(player, "head_item", ""):
-        player.head_item = "Traveler Hood"
-    if not getattr(player, "body_item", ""):
-        player.body_item = "Cloth Tunic"
-    if not getattr(player, "legs_item", ""):
-        player.legs_item = "Traveler Pants"
+    """Recalculate equipment flags without forcing default gear."""
     apply_equipment_effects(player)
 
 
@@ -125,7 +123,7 @@ def get_inventory_layout(screen: pygame.Surface):
 
     # Remaining width for three columns
     inner_w = panel_w - padding * 2 - profile_width - gap
-    col_w = int((inner_w - gap * 2) / 3)
+    col_w = int((inner_w - gap * 3) / 4)
 
     start_x = (screen_w - panel_w) // 2
     inv_x = start_x + padding
@@ -171,7 +169,7 @@ def get_grouped_slot_rects(state: "GameState") -> dict:
     col_w = layout.get("col_w", 140)
     gap = layout.get("gap", 18)
     # compute three column x positions inside the panel area
-    col_x = [start_x + i * (col_w + gap) for i in range(3)]
+    col_x = [start_x + i * (col_w + gap) for i in range(4)]
     slot_h = 56
     row_gap = layout.get("row_gap", 12)
 
@@ -180,17 +178,20 @@ def get_grouped_slot_rects(state: "GameState") -> dict:
 
     # Build grouped lists with original indices
     armor = []
+    shields = []
     weapons = []
     potions = []
     for i, item in enumerate(state.inventory):
         if not item:
             continue
-        if item in EQUIPMENT_SLOT_MAP.keys():
-            armor.append((i, item))
-        elif item in ("Bow", "Sword"):
+        if item in ("Bow", "Sword"):
             weapons.append((i, item))
         elif item in ("Speed Potion", "Health Potion"):
             potions.append((i, item))
+        elif item == "Shield":
+            shields.append((i, item))
+        elif item in EQUIPMENT_SLOT_MAP.keys():
+            armor.append((i, item))
         else:
             # put unknowns into weapons by default
             weapons.append((i, item))
@@ -214,8 +215,9 @@ def get_grouped_slot_rects(state: "GameState") -> dict:
             y += slot_h + layout["button_h"] + row_gap
 
     place_list(armor, 0)
-    place_list(weapons, 1)
-    place_list(potions, 2)
+    place_list(shields, 1)
+    place_list(weapons, 2)
+    place_list(potions, 3)
 
     return {"rects": index_rects, "buttons": buttons, "col_x": col_x, "inv_y": inv_y, "col_w": col_w}
 
@@ -261,6 +263,7 @@ def draw_inventory_panel(state: GameState):
 
     # Group inventory items preserving indices
     armor = []
+    shields = []
     weapons = []
     potions = []
     for i, item in enumerate(state.inventory):
@@ -270,23 +273,32 @@ def draw_inventory_panel(state: GameState):
             weapons.append((i, item))
         elif item in ("Speed Potion", "Health Potion"):
             potions.append((i, item))
+        elif item == "Shield":
+            shields.append((i, item))
         elif item in EQUIPMENT_SLOT_MAP.keys():
             armor.append((i, item))
         else:
             weapons.append((i, item))
 
-    col_x = [layout["inv_x"], layout["inv_x"] + col_w + gap, layout["inv_x"] + (col_w + gap) * 2]
-    titles = ["Armor", "Weapons", "Potions"]
-    lists = [armor, weapons, potions]
+    col_x = [
+        layout["inv_x"],
+        layout["inv_x"] + col_w + gap,
+        layout["inv_x"] + (col_w + gap) * 2,
+        layout["inv_x"] + (col_w + gap) * 3,
+    ]
+    titles = ["Armor", "Shields", "Weapons", "Potions"]
+    lists = [armor, shields, weapons, potions]
 
     button_regions = []
     # Draw faint separators between the three columns
     sep_x1 = col_x[1] - gap // 2
     sep_x2 = col_x[2] - gap // 2
+    sep_x3 = col_x[3] - gap // 2
     pygame.draw.line(screen, (80, 80, 120), (sep_x1, panel_rect.top + 8), (sep_x1, panel_rect.bottom - 8), 2)
     pygame.draw.line(screen, (80, 80, 120), (sep_x2, panel_rect.top + 8), (sep_x2, panel_rect.bottom - 8), 2)
+    pygame.draw.line(screen, (80, 80, 120), (sep_x3, panel_rect.top + 8), (sep_x3, panel_rect.bottom - 8), 2)
 
-    for col_i in range(3):
+    for col_i in range(4):
         title_surf = small_font.render(titles[col_i], True, (220, 220, 255))
         screen.blit(title_surf, (col_x[col_i], layout["inv_y"] - 16))
         y = layout["inv_y"] + 40
@@ -321,6 +333,16 @@ def draw_inventory_panel(state: GameState):
                 sy = icon_y + icon_h // 2
                 pygame.draw.line(screen, (180, 210, 255), (sx, sy - 10), (sx, sy + 10), 3)
                 pygame.draw.circle(screen, (80, 50, 30), (sx, sy + 12), 3)
+                lines = _render_text_lines(item, inv_font, small_font, text_max_w)
+            elif item == "Shield":
+                cx = icon_x + icon_w // 2
+                cy = icon_y + icon_h // 2
+                base_half = 10
+                top = (cx - 14, cy - 6)
+                base_l = (cx + base_half, cy - 10)
+                base_r = (cx + base_half, cy + 10)
+                pygame.draw.polygon(screen, (120, 180, 230), [top, base_l, base_r])
+                pygame.draw.polygon(screen, (80, 120, 170), [top, base_l, base_r], 2)
                 lines = _render_text_lines(item, inv_font, small_font, text_max_w)
             elif item in EQUIPMENT_SLOT_MAP.keys():
                 ax = icon_x + 4
@@ -360,17 +382,26 @@ def draw_inventory_panel(state: GameState):
                 screen.blit(btn_text, (btn_rect.centerx - btn_text.get_width() // 2, btn_rect.centery - btn_text.get_height() // 2))
                 button_regions.append((idx, btn_rect, "equip"))
             elif item in EQUIPMENT_SLOT_MAP.keys():
-                pygame.draw.rect(screen, (60, 80, 120), btn_rect, border_radius=4)
+                equip_slot = EQUIPMENT_SLOT_MAP[item]
+                attr = f"{equip_slot}_item"
+                current_equipped = getattr(state.player, attr, "")
+                is_equipped = current_equipped == item
+                btn_color = (70, 120, 90) if is_equipped else (50, 80, 130)
+                pygame.draw.rect(screen, btn_color, btn_rect, border_radius=4)
                 pygame.draw.rect(screen, (200, 220, 255), btn_rect, 2, border_radius=4)
-                btn_text = small_font.render("Equip", True, (240, 240, 255))
+                btn_label = "Unequip" if is_equipped else "Equip"
+                btn_text = small_font.render(btn_label, True, (240, 240, 255))
                 screen.blit(btn_text, (btn_rect.centerx - btn_text.get_width() // 2, btn_rect.centery - btn_text.get_height() // 2))
                 button_regions.append((idx, btn_rect, "equip"))
             elif item == "Speed Potion":
-                pygame.draw.rect(screen, (120, 80, 80), btn_rect, border_radius=4)
+                is_equipped = getattr(state.player, "speed_potion_equipped", False)
+                btn_color = (70, 120, 90) if is_equipped else (50, 80, 130)
+                pygame.draw.rect(screen, btn_color, btn_rect, border_radius=4)
                 pygame.draw.rect(screen, (200, 220, 255), btn_rect, 2, border_radius=4)
-                btn_text = small_font.render("Use", True, (240, 240, 255))
+                btn_label = "Unequip" if is_equipped else "Equip"
+                btn_text = small_font.render(btn_label, True, (240, 240, 255))
                 screen.blit(btn_text, (btn_rect.centerx - btn_text.get_width() // 2, btn_rect.centery - btn_text.get_height() // 2))
-                button_regions.append((idx, btn_rect, "use_potion"))
+                button_regions.append((idx, btn_rect, "equip"))
             else:
                 # no action
                 pass

@@ -7,6 +7,25 @@ import pygame
 import settings
 
 
+def _clamp01(v: float) -> float:
+    return max(0.0, min(1.0, v))
+
+
+def swing_ease(swing_timer: float, total_time: float) -> float:
+    """Return a smooth 0..1 eased phase for the swing progress."""
+    if swing_timer <= 0 or total_time <= 0:
+        return 0.0
+    raw_phase = 1.0 - _clamp01(swing_timer / total_time)
+    # smootherstep for gentle acceleration and deceleration
+    return raw_phase * raw_phase * raw_phase * (raw_phase * (raw_phase * 6 - 15) + 10)
+
+
+def swing_reach_multiplier(swing_timer: float, total_time: float, min_reach: float = 0.65, max_reach: float = 1.0) -> float:
+    """Scale how far the sword extends during a swing; starts shorter and reaches full extension mid-swing."""
+    eased = swing_ease(swing_timer, total_time)
+    return min_reach + (max_reach - min_reach) * eased
+
+
 def get_sword_segment(center: pygame.Vector2, facing_vec: pygame.Vector2, extend_distance: float, length: float):
     f = pygame.Vector2(facing_vec)
     if f.length_squared() == 0:
@@ -34,7 +53,7 @@ def sword_polygon_points(center: pygame.Vector2, facing_vec: pygame.Vector2, ext
 def get_swing_dir(base_dir: pygame.Vector2, swing_timer: float, total_time: float, fallback_dir: pygame.Vector2):
     if swing_timer <= 0 or total_time <= 0:
         return fallback_dir
-    phase = 1.0 - max(0.0, min(1.0, swing_timer / total_time))
+    phase = swing_ease(swing_timer, total_time)
     start_angle = -settings.SWING_ARC_DEG / 2
     angle = start_angle + settings.SWING_ARC_DEG * phase
     b = pygame.Vector2(base_dir)
@@ -67,8 +86,9 @@ def deal_damage_if_hit(
 ):
     if swing_timer <= 0:
         return 0
+    reach_mult = swing_reach_multiplier(swing_timer, swing_time)
     sword_a, sword_b = get_sword_segment(
-        attacker_pos, attack_dir, extend_distance, length
+        attacker_pos, attack_dir, extend_distance * reach_mult, length * reach_mult
     )
     dist = point_segment_distance(target_pos, sword_a, sword_b)
     return damage if dist <= (target_radius + sword_width / 2) else 0

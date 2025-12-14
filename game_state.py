@@ -27,8 +27,11 @@ class GameState:
     coin_count: int = 0
     blood_splats: list[dict] = field(default_factory=list)
     arrows: list[dict] = field(default_factory=list)
+    chests: list[dict] = field(default_factory=list)
+    loot_notices: list[dict] = field(default_factory=list)
     shake_timer: float = 0.0
     door_revealed: bool = False
+    camera_offset: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
     level_index: int = 1
     leather_armor_bought: bool = False
     has_map: bool = False
@@ -46,6 +49,15 @@ class GameState:
     resume_index: int = 0
     font: pygame.font.Font | None = None
     map_comment_shown: bool = False
+    lock_target: PigState | None = None
+    auto_open_map_after_dialogue: bool = False
+    treasure_hint_visible: bool = False
+    quest_explained: bool = False
+    intro_active: bool = True
+    intro_lines: list[str] = field(default_factory=list)
+    intro_durations: list[float] = field(default_factory=list)
+    intro_index: int = 0
+    intro_line_start: float = 0.0
 
 
 def create_game_state(screen: pygame.Surface) -> GameState:
@@ -56,23 +68,29 @@ def create_game_state(screen: pygame.Surface) -> GameState:
         pygame.Vector2(settings.SCREEN_WIDTH / 2, settings.SCREEN_HEIGHT / 2)
     )
     state = GameState(screen=screen, clock=clock, player=player, font=font)
-    # Starter gear to demo equipment slots (grouped: armor, weapons, potions)
-    starter = [
-        # Armor section
-        "Explorer Cap",
-        "Cloth Tunic",
-        "Traveler Pants",
-        # Weapons section
-        "Sword",
-        "Bow",
-        # Potions section
-        "Health Potion",
+    # Intro text sequence shown before waking in the first room
+    state.intro_lines = [
+        "In the beginning, there was peace.",
+        "Until he came and destroyed all.",
+        "Please save us.",
+        "You are Elrule's last hope.",
     ]
+    state.intro_durations = [2.5, 2.5, 2.5, 2.5]
+    state.intro_line_start = pygame.time.get_ticks() / 1000.0
+
+    # Debug start: skip intro and begin in the field with progress.
+    state.intro_active = False
+    state.level_index = settings.FIELD_LEVEL_INDEX
+    state.coin_count = 50
+    state.has_map = True
+    state.shopkeeper_greeted = True
+    # Give the player basic gear + bow.
+    starter = ["Sword", "Shield", "Bow", "Health Potion"]
     for i, item in enumerate(starter):
         if i < len(state.inventory):
             state.inventory[i] = item
-    # Start at the very beginning of the game (first level)
-    state.level_index = 1
-    # Start with no coins by default
-    state.coin_count = 0
+    state.player.weapon_item = "Sword"
+    state.player.shield_item = "Shield"
+    state.player.bow_equipped = True
+    state.player.potion_count = 1
     return state

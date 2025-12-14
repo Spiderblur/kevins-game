@@ -4,6 +4,8 @@
 SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
 TARGET_FPS = 60
+# Levels
+FIELD_LEVEL_INDEX = 4
 
 # Radii
 PLAYER_RADIUS = 40
@@ -21,15 +23,17 @@ CHASE_RANGE = 500
 # Sword
 SWORD_LENGTH = 64
 SWORD_WIDTH = 14
-PLAYER_DAMAGE = 20
+PLAYER_DAMAGE = 6
 PIG_DAMAGE = 5  # each pig deals 5 damage
-PLAYER_SWING_TIME = 0.18  # seconds sword is "active"
-PIG_SWING_TIME = 0.18
+PLAYER_SWING_TIME = 0.45  # longer active window for a weightier swing
+PLAYER_SWING_RECOVER_TIME = 0.18  # time to settle arm/sword back to idle
+PIG_SWING_TIME = 0.5  # active swing window (pairs with windup for 1.5s total)
 PLAYER_COOLDOWN = 0.5  # time before next swing
-PIG_COOLDOWN = 0.5
+PIG_COOLDOWN = 0.0  # no extra delay beyond windup + swing
+PIG_WINDUP_TIME = 1.0  # pause before swinging
 PLAYER_SWING_DISTANCE = PLAYER_RADIUS + 16
-PIG_SWING_DISTANCE = PIG_RADIUS + 16
-SWING_ARC_DEG = 80  # total arc angle for sword swing animation
+PIG_SWING_DISTANCE = PLAYER_SWING_DISTANCE  # match player reach
+SWING_ARC_DEG = 60  # total arc angle for sword swing animation (smaller front swing)
 BOW_DAMAGE = int(PLAYER_DAMAGE * 0.6)
 BOW_SPEED = 640
 BOW_COOLDOWN = 0.45
@@ -56,7 +60,7 @@ SHIELD_MAX_BLOCKS = 5
 
 # Potions and coins
 POTION_HEAL = 30
-START_POTION_COUNT = 1
+START_POTION_COUNT = 0
 COIN_VALUE = 5
 COIN_PICKUP_RADIUS = 50
 SPEED_POTION_COST = 10
