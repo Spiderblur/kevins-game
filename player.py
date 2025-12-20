@@ -39,6 +39,7 @@ class PlayerState:
     shield_item: str = ""
     bow_equipped: bool = False
     bow_cooldown: float = 0.0
+    summon_item: str = ""
     stamina: float = settings.STAMINA_MAX
     is_sprinting: bool = False
     swing_recover_timer: float = 0.0

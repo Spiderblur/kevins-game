@@ -59,6 +59,15 @@ class GameState:
     intro_durations: list[float] = field(default_factory=list)
     intro_index: int = 0
     intro_line_start: float = 0.0
+    # Optional dev shortcut for starting progress (e.g. "post_bow").
+    debug_start: str | None = None
+    # Dialogue context tag for one-off scripted actions.
+    dialogue_tag: str | None = None
+    # Boss reward / post-boss spirit gate
+    boss_reward_spawned: bool = False
+    spirit_spawned: bool = False
+    spirit_reward_given: bool = False
+    spirit_departed: bool = False
 
 
 def create_game_state(screen: pygame.Surface) -> GameState:
@@ -79,13 +88,12 @@ def create_game_state(screen: pygame.Surface) -> GameState:
     state.intro_durations = [2.5, 2.5, 2.5, 2.5]
     state.intro_line_start = pygame.time.get_ticks() / 1000.0
 
-    # Debug start: skip story intro and begin at the start of the field intro.
+    # Debug start: skip story intro and begin in the field after the bow is obtained.
     state.intro_active = False
     state.level_index = settings.FIELD_LEVEL_INDEX
-    state.coin_count = 0
-    state.auto_start_field_intro = True
-    # Give the player basic gear.
-    starter = ["Sword", "Shield", "Health Potion"]
+    state.debug_start = "post_bow"
+    # Give the player basic gear (the rest is applied in game.run after reset_round).
+    starter = ["Sword", "Shield", "Health Potion", "Bow"]
     for i, item in enumerate(starter):
         if i < len(state.inventory):
             state.inventory[i] = item

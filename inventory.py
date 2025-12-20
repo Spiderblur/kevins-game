@@ -21,6 +21,7 @@ EQUIPMENT_SLOT_MAP = {
     "Runner Boots": "legs",
         "Sword": "weapon",
         "Shield": "shield",
+    "Bacon of the Dead": "summon",
 }
 ARMOR_ITEMS = {"Leather Armor"}
 
@@ -184,7 +185,7 @@ def get_grouped_slot_rects(state: "GameState") -> dict:
     for i, item in enumerate(state.inventory):
         if not item:
             continue
-        if item in ("Bow", "Sword"):
+        if item in ("Bow", "Sword", "Bacon of the Dead"):
             weapons.append((i, item))
         elif item in ("Speed Potion", "Health Potion"):
             potions.append((i, item))
@@ -269,7 +270,7 @@ def draw_inventory_panel(state: GameState):
     for i, item in enumerate(state.inventory):
         if not item:
             continue
-        if item in ("Bow", "Sword"):
+        if item in ("Bow", "Sword", "Bacon of the Dead"):
             weapons.append((i, item))
         elif item in ("Speed Potion", "Health Potion"):
             potions.append((i, item))

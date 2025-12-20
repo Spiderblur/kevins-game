@@ -27,6 +27,7 @@ class PigState:
     is_evil: bool = False
     is_boss: bool = False
     in_boss_arena: bool = False
+    is_ally: bool = False
     windup_timer: float = 0.0
     walk_cycle: float = 0.0
 
@@ -46,6 +47,7 @@ def make_pig(
     swing_time: float = settings.PIG_SWING_TIME,
     is_boss: bool = False,
     in_boss_arena: bool = False,
+    is_ally: bool = False,
 ) -> PigState:
     return PigState(
         pos=pygame.Vector2(pos),
@@ -57,6 +59,7 @@ def make_pig(
         swing_time=swing_time,
         is_boss=is_boss,
         in_boss_arena=in_boss_arena,
+        is_ally=is_ally,
     )
 
 

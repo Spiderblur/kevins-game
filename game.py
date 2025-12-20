@@ -57,14 +57,19 @@ SKILL_LINE = "Shopkeeper: \"I have never seen someone with your skill.\""
 OPEN_MAP_LINE = "Shopkeeper: \"Open the map next.\""
 TREASURE_LINE = "Shopkeeper: \"If you go to this point, there might be some loot you can claim.\""
 MONSTER_WARN_LINE = "Shopkeeper: \"But beware, there are lots of monsters there.\""
+SPIRIT_REWARD_LINE1 = "Spirit: \"Heroic actions must be rewarded. Here is a reward for you.\""
+SPIRIT_REWARD_LINE2 = "Spirit: \"I just enhanced your abilities.\""
+SPIRIT_WHO_LINE1 = "You: \"Who are you?\""
+SPIRIT_WHO_LINE2 = "Spirit: \"Who am I? I'm afraid I have to keep that a secret.\""
+SPIRIT_WHO_LINE3 = "Spirit: \"Continue on your journey, and may you always have spirit.\""
 ROOM3_FIELD_WIDTH = 4500
 ROOM3_FIELD_HEIGHT = 3200
 FIELD_LEVEL = settings.FIELD_LEVEL_INDEX
 INTRO_LINE_DURATION = 2.0
 LOOT_REVEAL_TIME = 2.5
 LEATHER_ARMOR_UNLOCKED = True
-ROOM_WORLD_WIDTH = settings.SCREEN_WIDTH * 2
-ROOM_WORLD_HEIGHT = settings.SCREEN_HEIGHT * 2
+ROOM_WORLD_WIDTH = settings.SCREEN_WIDTH * 3
+ROOM_WORLD_HEIGHT = settings.SCREEN_HEIGHT * 3
 MAP_TO_PERSON_SCALE = 1.0
 # Quest location in field world coordinates (far enough to feel like a journey).
 QUEST_POS_WORLD = pygame.Vector2(ROOM3_FIELD_WIDTH * 0.85, ROOM3_FIELD_HEIGHT * 0.25)
@@ -105,7 +110,88 @@ def apply_field_start_progress(state: GameState):
     state.boss_spawned = False
     state.boss_defeated = False
     state.boss_door_closed = False
+    state.boss_reward_spawned = False
+    state.spirit_spawned = False
+    state.spirit_reward_given = False
+    state.spirit_departed = False
+    state.dialogue_tag = None
     update_camera_follow(state)
+
+
+def apply_post_bow_start(state: GameState, coin_count: int = 10):
+    """Dev shortcut: start in the field after receiving the bow (saves early dialogue/combat)."""
+    state.coin_count = coin_count
+    state.has_map = True
+    state.shopkeeper_greeted = True
+    state.map_tested = True
+    state.rumor_shown = True
+    state.evil_spawned = True
+    state.evil_defeated = True
+    state.bow_given = True
+    state.treasure_hint_visible = True
+    state.quest_explained = True
+
+    # Ensure the bow exists and is equipped for quick testing.
+    if "Bow" not in state.inventory:
+        for i, item in enumerate(state.inventory):
+            if item == "":
+                state.inventory[i] = "Bow"
+                break
+        else:
+            state.inventory[-1] = "Bow"
+    state.player.bow_equipped = True
+
+
+def get_spirit_rect_world() -> pygame.Rect:
+    """World rect for the post-boss spirit that blocks the boss arena exit."""
+    door = get_field_boss_arena_door_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
+    rect = pygame.Rect(0, 0, settings.NPC_WIDTH, settings.NPC_HEIGHT)
+    rect.midbottom = door.midbottom
+    return rect
+
+
+def spawn_boss_reward_chest(state: GameState, pos_world: pygame.Vector2):
+    if state.boss_reward_spawned:
+        return
+    state.boss_reward_spawned = True
+    state.chests.append(
+        {
+            "pos": pygame.Vector2(pos_world),
+            "item": "Bacon of the Dead",
+            "opened": False,
+            "reveal_timer": 0.0,
+        }
+    )
+
+
+def handle_boss_defeated(state: GameState, boss_pos: pygame.Vector2):
+    """Boss defeat hook: clear arena enemies, spawn reward chest, and spawn spirit gate."""
+    if state.boss_defeated:
+        return
+    state.boss_defeated = True
+    state.boss_door_closed = False
+    state.lock_target = None
+
+    # Kill all arena pigs (boss + minions) so the room clears out.
+    for pig in state.pigs:
+        if pig.health <= 0:
+            continue
+        if getattr(pig, "is_ally", False):
+            continue
+        if pig.is_boss or getattr(pig, "in_boss_arena", False):
+            pig.health = 0
+            pig.windup_timer = 0.0
+            pig.swing_timer = 0.0
+            pig.cooldown = 0.0
+            pig.coin_dropped = True
+
+    # Reward chest appears near where the boss died.
+    spawn_boss_reward_chest(state, pygame.Vector2(boss_pos) + pygame.Vector2(0, 120))
+
+    # Spirit blocks the exit until you talk to it.
+    state.spirit_spawned = True
+    state.spirit_reward_given = False
+    state.spirit_departed = False
 
 
 def spawn_pig_boss_encounter(state: GameState):
@@ -125,7 +211,8 @@ def spawn_pig_boss_encounter(state: GameState):
         in_boss_arena=True,
     )
 
-    offsets = [(-160, 80), (160, 80), (-220, -60), (220, -60)]
+    # Fewer minions so the boss fight is less crowded.
+    offsets = [(-180, 100), (180, 100)]
     minions = [
         make_pig(
             pygame.Vector2(boss_pos.x + dx, boss_pos.y + dy),
@@ -168,13 +255,31 @@ def push_circle_out_of_rect(pos: pygame.Vector2, radius: float, rect: pygame.Rec
             pos.y += dy / dist * push
 
 
-def start_dialogue(state: GameState, lines: List[str]):
+def push_circle_out_of_circle(center: pygame.Vector2, radius: float, other_center: pygame.Vector2, other_radius: float):
+    """Push a circle center away from another circle if overlapping."""
+    delta = center - other_center
+    dist_sq = delta.length_squared()
+    min_dist = radius + other_radius
+    if dist_sq == 0:
+        # Perfect overlap; push upward.
+        center.y -= min_dist
+        return
+    dist = math.sqrt(dist_sq)
+    if dist < min_dist:
+        push = min_dist - dist
+        dir_vec = delta / dist
+        center.x += dir_vec.x * push
+        center.y += dir_vec.y * push
+
+
+def start_dialogue(state: GameState, lines: List[str], *, tag: str | None = None):
     """Begin showing dialogue lines with typewriter reveal."""
     state.dialogue_lines = list(lines)
     state.dialogue_index = 0
     state.dialogue_start_time = pygame.time.get_ticks() / 1000.0
     state.resume_lines = list(lines)
     state.resume_index = 0
+    state.dialogue_tag = tag
 
 
 def restore_dialogue(state: GameState):
@@ -300,10 +405,10 @@ def auto_equip_if_empty(state: GameState, item: str):
     apply_equipment_effects(player)
 
 
-def try_open_chest(state: GameState, open_radius: float = 110.0):
-    """Open the nearest unopened chest in room 1 when close enough."""
-    if state.level_index != 1 or not state.chests:
-        return
+def try_open_chest(state: GameState, open_radius: float = 110.0) -> bool:
+    """Open the nearest unopened chest when close enough."""
+    if not state.chests:
+        return False
     player_pos = state.player.pos
     for chest in state.chests:
         if chest.get("opened"):
@@ -317,11 +422,12 @@ def try_open_chest(state: GameState, open_radius: float = 110.0):
             # Health potions also add one ready-to-use charge
             if item == "Health Potion":
                 state.player.potion_count += 1
-            return
+            return True
+    return False
 
 
 def draw_room1_chests(state: GameState, cam: pygame.Vector2):
-    """Render starter chests and prompts in the empty first room."""
+    """Render chests and prompts."""
     if not state.chests:
         return
     screen = state.screen
@@ -376,6 +482,7 @@ def handle_dialogue_click(state: GameState):
         return
     shown, full = dialogue_reveal(state)
     now = pygame.time.get_ticks() / 1000.0
+    finished_tag: str | None = None
     if not full:
         # Instantly finish this line
         state.dialogue_start_time = now - (len(line) / settings.DIALOGUE_CHARS_PER_SEC)
@@ -386,11 +493,13 @@ def handle_dialogue_click(state: GameState):
         state.dialogue_start_time = now
     else:
         # Finished this dialogue block; clear active dialogue and resume state
+        finished_tag = state.dialogue_tag
         state.dialogue_lines = []
         state.dialogue_index = 0
         state.dialogue_start_time = 0.0
         state.resume_lines = []
         state.resume_index = 0
+        state.dialogue_tag = None
         # After map is tested, auto-advance to rumor lines once
     # Spawn evil creature when reaching the warning line (once)
     if line == EVIL_LINE and not state.evil_spawned:
@@ -399,6 +508,8 @@ def handle_dialogue_click(state: GameState):
         give_bow(state)
     if line == MONSTER_WARN_LINE:
         state.quest_explained = True
+    if finished_tag == "spirit_depart":
+        state.spirit_departed = True
 
 
 def draw_dialogue(state: GameState):
@@ -720,10 +831,10 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
             player.is_blocking = False
         if event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
             # Toggle lock-on to nearest living pig
-            if state.lock_target and state.lock_target.health > 0:
+            if state.lock_target and state.lock_target.health > 0 and not getattr(state.lock_target, "is_ally", False):
                 state.lock_target = None
             else:
-                live_pigs = [p for p in state.pigs if p.health > 0]
+                live_pigs = [p for p in state.pigs if p.health > 0 and not getattr(p, "is_ally", False)]
                 if live_pigs:
                     state.lock_target = min(live_pigs, key=lambda p: (p.pos - player.pos).length_squared())
         if event.type == pygame.KEYDOWN and event.key == pygame.K_q:
@@ -736,8 +847,19 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                 player.is_drinking_potion = True
                 player.potion_timer = 1.0
         if event.type == pygame.KEYDOWN and event.key == pygame.K_e:
-            if state.level_index == 1:
-                try_open_chest(state)
+            if try_open_chest(state):
+                continue
+            if state.level_index == FIELD_LEVEL and state.spirit_spawned and not state.spirit_departed:
+                spirit_rect = get_spirit_rect_world()
+                if spirit_rect.inflate(160, 160).collidepoint(player.pos.x, player.pos.y):
+                    if not state.spirit_reward_given:
+                        state.spirit_reward_given = True
+                        player.max_health += settings.SPIRIT_HEALTH_BONUS
+                        player.health = min(player.max_health, player.health + settings.SPIRIT_HEALTH_BONUS)
+                        start_dialogue(state, [SPIRIT_REWARD_LINE1, SPIRIT_REWARD_LINE2])
+                    else:
+                        start_dialogue(state, [SPIRIT_WHO_LINE1, SPIRIT_WHO_LINE2, SPIRIT_WHO_LINE3], tag="spirit_depart")
+                    continue
             if (
                 LEATHER_ARMOR_UNLOCKED
                 and state.level_index >= FIELD_LEVEL
@@ -750,6 +872,30 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                     state.coin_count -= settings.SPEED_POTION_COST
                     state.leather_armor_bought = True
                     add_item_to_inventory(state, "Leather Armor")
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+            if getattr(state, "inventory_open", False):
+                continue
+            if getattr(player, "summon_item", "") != "Bacon of the Dead":
+                continue
+            # Only allow one active ally at a time.
+            if any(getattr(p, "is_ally", False) and p.health > 0 for p in state.pigs):
+                continue
+            in_arena = False
+            if state.level_index == FIELD_LEVEL:
+                arena = get_field_boss_arena_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
+                in_arena = arena.collidepoint(player.pos.x, player.pos.y)
+            ally = make_pig(
+                pygame.Vector2(player.pos),
+                max_health=int(settings.PIG_MAX_HEALTH * 2),
+                radius=int(settings.PIG_RADIUS * 0.9),
+                attack_cooldown=0.35,
+                windup_time=0.25,
+                swing_time=0.35,
+                in_boss_arena=in_arena,
+                is_ally=True,
+            )
+            ally.coin_dropped = True
+            state.pigs.append(ally)
         if state.inventory_open and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             mouse_x, mouse_y = event.pos
             grouped = get_grouped_slot_rects(state)
@@ -889,6 +1035,14 @@ def update_game(state: GameState):
                     settings.PLAYER_RADIUS,
                     get_field_boss_arena_door_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT),
                 )
+            if state.spirit_spawned and not state.spirit_departed:
+                # Block the arena exit until the spirit departs.
+                push_circle_out_of_rect(
+                    player.pos,
+                    settings.PLAYER_RADIUS,
+                    get_field_boss_arena_door_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT),
+                )
+                push_circle_out_of_rect(player.pos, settings.PLAYER_RADIUS, get_spirit_rect_world())
 
         # Keep player inside the current world's bounds so they can't walk off-screen.
         world_w, world_h = current_world_size(state)
@@ -932,24 +1086,64 @@ def update_game(state: GameState):
         arena_door = get_field_boss_arena_door_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
         boss_door_closed = getattr(state, "boss_door_closed", False)
 
+    view_rect_world = pygame.Rect(
+        int(state.camera_offset.x),
+        int(state.camera_offset.y),
+        state.screen.get_width(),
+        state.screen.get_height(),
+    )
+
     for pig in state.pigs:
         if pig.health <= 0:
             continue
-        to_player = player.pos - pig.pos
-        dist = to_player.length()
-        if dist > 0:
-            pig.facing = to_player / dist
+        if getattr(pig, "is_ally", False):
+            targets = [
+                p
+                for p in state.pigs
+                if p.health > 0
+                and not getattr(p, "is_ally", False)
+                and view_rect_world.collidepoint(p.pos.x, p.pos.y)
+            ]
+            if targets:
+                target = min(targets, key=lambda t: (t.pos - pig.pos).length_squared())
+                to_target = target.pos - pig.pos
+                dist = to_target.length()
+                if dist > 0:
+                    pig.facing = to_target / dist
+                in_attack_range = dist < (pig.radius + target.radius + settings.SWORD_LENGTH * 0.6)
+                ready_to_attack = pig.cooldown <= 0 and pig.swing_timer <= 0 and pig.windup_timer <= 0
+                if dist > 0 and pig.windup_timer <= 0 and pig.swing_timer <= 0:
+                    move_step = pig.facing * settings.ALLY_PIG_SPEED * state.dt
+                    pig.pos += move_step
+                    pig.walk_cycle = (pig.walk_cycle + move_step.length() * 0.05) % (math.tau)
+                if in_attack_range and ready_to_attack:
+                    pig.windup_timer = pig.windup_time
+                    pig.swing_base_dir = pig.facing.copy()
+            else:
+                to_player = player.pos - pig.pos
+                dist = to_player.length()
+                if dist > 0:
+                    pig.facing = to_player / dist
+                if dist > 120 and pig.windup_timer <= 0 and pig.swing_timer <= 0:
+                    move_step = pig.facing * settings.ALLY_PIG_SPEED * state.dt
+                    pig.pos += move_step
+                    pig.walk_cycle = (pig.walk_cycle + move_step.length() * 0.05) % (math.tau)
+        else:
+            to_player = player.pos - pig.pos
+            dist = to_player.length()
+            if dist > 0:
+                pig.facing = to_player / dist
 
-        in_attack_range = dist < (pig.radius + settings.PLAYER_RADIUS + settings.SWORD_LENGTH * 0.6)
-        ready_to_attack = pig.cooldown <= 0 and pig.swing_timer <= 0 and pig.windup_timer <= 0
+            in_attack_range = dist < (pig.radius + settings.PLAYER_RADIUS + settings.SWORD_LENGTH * 0.6)
+            ready_to_attack = pig.cooldown <= 0 and pig.swing_timer <= 0 and pig.windup_timer <= 0
 
-        if dist < state.chase_range and dist > 0 and pig.windup_timer <= 0 and pig.swing_timer <= 0:
-            move_step = pig.facing * state.pig_speed * state.dt
-            pig.pos += move_step
-            pig.walk_cycle = (pig.walk_cycle + move_step.length() * 0.05) % (math.tau)
-        if in_attack_range and ready_to_attack:
-            pig.windup_timer = pig.windup_time
-            pig.swing_base_dir = pig.facing.copy()
+            if dist < state.chase_range and dist > 0 and pig.windup_timer <= 0 and pig.swing_timer <= 0:
+                move_step = pig.facing * state.pig_speed * state.dt
+                pig.pos += move_step
+                pig.walk_cycle = (pig.walk_cycle + move_step.length() * 0.05) % (math.tau)
+            if in_attack_range and ready_to_attack:
+                pig.windup_timer = pig.windup_time
+                pig.swing_base_dir = pig.facing.copy()
 
         if pig.knockback_timer > 0:
             pig.pos += pig.knockback_vec * (settings.KNOCKBACK_SPEED * state.dt)
@@ -960,6 +1154,70 @@ def update_game(state: GameState):
                 push_circle_out_of_rect(pig.pos, pig.radius, wall_rect)
             if boss_door_closed:
                 push_circle_out_of_rect(pig.pos, pig.radius, arena_door)
+
+    # Prevent pigs from overlapping/squishing together (simple circle separation).
+    live_pigs = [p for p in state.pigs if p.health > 0]
+    if len(live_pigs) > 1:
+        # A couple passes makes the separation feel much more stable.
+        for _ in range(2):
+            for i in range(len(live_pigs)):
+                a = live_pigs[i]
+                for j in range(i + 1, len(live_pigs)):
+                    b = live_pigs[j]
+                    delta = b.pos - a.pos
+                    dist_sq = delta.length_squared()
+                    min_dist = a.radius + b.radius + 6
+                    if dist_sq == 0:
+                        # Perfect overlap: pick a direction deterministically from indices.
+                        delta = pygame.Vector2(1, 0).rotate((i * 97 + j * 193) % 360)
+                        dist_sq = 1.0
+                    dist = math.sqrt(dist_sq)
+                    if dist < min_dist:
+                        push = (min_dist - dist) / 2.0
+                        dir_vec = delta / dist
+                        a.pos -= dir_vec * push
+                        b.pos += dir_vec * push
+
+            # Keep pigs inside bounds and re-apply boss arena walls after separation.
+            world_w, world_h = current_world_size(state)
+            for pig in live_pigs:
+                pig.pos.x = max(pig.radius, min(pig.pos.x, world_w - pig.radius))
+                pig.pos.y = max(pig.radius, min(pig.pos.y, world_h - pig.radius))
+                if state.level_index == FIELD_LEVEL and pig.in_boss_arena:
+                    for wall_rect in arena_walls:
+                        push_circle_out_of_rect(pig.pos, pig.radius, wall_rect)
+                    if boss_door_closed or (state.spirit_spawned and not state.spirit_departed):
+                        push_circle_out_of_rect(pig.pos, pig.radius, arena_door)
+
+    # Treat pigs as solid so the player can't overlap them.
+    if player.health > 0 and live_pigs:
+        for pig in live_pigs:
+            push_circle_out_of_circle(player.pos, settings.PLAYER_RADIUS, pig.pos, pig.radius)
+        world_w, world_h = current_world_size(state)
+        player.pos.x = max(settings.PLAYER_RADIUS, min(player.pos.x, world_w - settings.PLAYER_RADIUS))
+        player.pos.y = max(settings.PLAYER_RADIUS, min(player.pos.y, world_h - settings.PLAYER_RADIUS))
+        if state.level_index == FIELD_LEVEL:
+            table_rect = get_room3_table_rect(state.screen, pygame.Vector2(0, 0))
+            push_circle_out_of_rect(player.pos, settings.PLAYER_RADIUS, table_rect)
+            keeper_rect = get_shopkeeper_rect(state.screen)
+            push_circle_out_of_rect(player.pos, settings.PLAYER_RADIUS, keeper_rect)
+            for house_rect in get_field_house_solid_rects(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT):
+                push_circle_out_of_rect(player.pos, settings.PLAYER_RADIUS, house_rect)
+            for wall_rect in get_field_boss_arena_wall_rects(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT):
+                push_circle_out_of_rect(player.pos, settings.PLAYER_RADIUS, wall_rect)
+            if getattr(state, "boss_door_closed", False):
+                push_circle_out_of_rect(
+                    player.pos,
+                    settings.PLAYER_RADIUS,
+                    get_field_boss_arena_door_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT),
+                )
+            if state.spirit_spawned and not state.spirit_departed:
+                push_circle_out_of_rect(
+                    player.pos,
+                    settings.PLAYER_RADIUS,
+                    get_field_boss_arena_door_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT),
+                )
+                push_circle_out_of_rect(player.pos, settings.PLAYER_RADIUS, get_spirit_rect_world())
 
     if player.swing_timer > 0:
         prev_swing = player.swing_timer
@@ -1037,14 +1295,16 @@ def update_game(state: GameState):
             for pig in state.pigs:
                 if pig.health <= 0:
                     continue
+                if getattr(pig, "is_ally", False):
+                    continue
                 if (pig.pos - pos).length() <= pig.radius:
                     pig.health = max(0, pig.health - settings.BOW_DAMAGE)
-                    if pig.health == 0 and not pig.coin_dropped:
-                        state.coin_pickups.append({"pos": pig.pos.copy(), "value": settings.COIN_VALUE})
-                        pig.coin_dropped = True
-                    if pig.health == 0 and pig.is_boss:
-                        state.boss_defeated = True
-                        state.boss_door_closed = False
+                    if pig.health == 0:
+                        if pig.is_boss:
+                            handle_boss_defeated(state, pig.pos)
+                        elif not pig.coin_dropped:
+                            state.coin_pickups.append({"pos": pig.pos.copy(), "value": settings.COIN_VALUE})
+                            pig.coin_dropped = True
                     hit = True
                     break
             if not hit:
@@ -1062,6 +1322,8 @@ def update_game(state: GameState):
     if player.health > 0:
         for pig in state.pigs:
             if pig.health <= 0:
+                continue
+            if getattr(pig, "is_ally", False):
                 continue
             player_attack_dir = (
                 get_swing_dir(player.swing_base_dir, player.swing_timer, settings.PLAYER_SWING_TIME, player.facing)
@@ -1100,8 +1362,7 @@ def update_game(state: GameState):
                     state.coin_pickups.append({"pos": pig.pos.copy(), "value": settings.COIN_VALUE})
                     pig.coin_dropped = True
                 if pig.health == 0 and pig.is_boss:
-                    state.boss_defeated = True
-                    state.boss_door_closed = False
+                    handle_boss_defeated(state, pig.pos)
                 if pig.is_evil and not state.evil_defeated:
                     state.evil_defeated = True
 
@@ -1111,9 +1372,63 @@ def update_game(state: GameState):
         else:
             state.door_revealed = False
 
+    # Ally summon attacks nearby enemies (within the player's view).
+    for ally in state.pigs:
+        if ally.health <= 0 or not getattr(ally, "is_ally", False):
+            continue
+        targets = [
+            p
+            for p in state.pigs
+            if p.health > 0
+            and not getattr(p, "is_ally", False)
+            and view_rect_world.collidepoint(p.pos.x, p.pos.y)
+        ]
+        if not targets:
+            continue
+        target = min(targets, key=lambda t: (t.pos - ally.pos).length_squared())
+        ally_attack_dir = (
+            get_swing_dir(ally.swing_base_dir, ally.swing_timer, ally.swing_time, ally.facing)
+            if ally.swing_timer > 0
+            else ally.facing
+        )
+        dmg_to_enemy = deal_damage_if_hit(
+            ally.pos,
+            ally_attack_dir,
+            target.pos,
+            target.radius,
+            ally.swing_timer,
+            ally.swing_time,
+            settings.ALLY_PIG_DAMAGE,
+            settings.PIG_SWING_DISTANCE,
+            settings.SWORD_LENGTH,
+            settings.SWORD_WIDTH,
+        )
+        if dmg_to_enemy:
+            target.health = max(0, target.health - dmg_to_enemy)
+            # Stop this swing after a successful hit.
+            ally.swing_timer = 0.0
+            ally.cooldown = ally.attack_cooldown
+            # Cancel enemy attack when hit.
+            target.windup_timer = 0.0
+            target.swing_timer = 0.0
+            target.cooldown = target.attack_cooldown
+            dir_vec = target.pos - ally.pos
+            if dir_vec.length_squared() > 0:
+                target.knockback_vec = dir_vec.normalize()
+                target.knockback_timer = settings.KNOCKBACK_DURATION
+            spawn_blood_splatter(target.pos, state.blood_splats)
+            if target.health == 0:
+                if target.is_boss:
+                    handle_boss_defeated(state, target.pos)
+                elif not target.coin_dropped:
+                    state.coin_pickups.append({"pos": target.pos.copy(), "value": settings.COIN_VALUE})
+                    target.coin_dropped = True
+
     if player.health > 0:
         for pig in state.pigs:
             if pig.health <= 0:
+                continue
+            if getattr(pig, "is_ally", False):
                 continue
             pig_attack_dir = (
                 get_swing_dir(pig.swing_base_dir, pig.swing_timer, pig.swing_time, pig.facing)
@@ -1198,6 +1513,7 @@ def draw_game(state: GameState):
             draw_room1_chests(state, cam)
     else:
         blit_field_environment(screen, cam, ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
+        draw_room1_chests(state, cam)
 
         table_color = (150, 100, 40)
         table_outline = (90, 60, 20)
@@ -1232,6 +1548,18 @@ def draw_game(state: GameState):
             pygame.draw.rect(screen, (90, 60, 20), boss_door)
             pygame.draw.rect(screen, (180, 140, 60), boss_door, 3)
 
+        if state.spirit_spawned and not state.spirit_departed:
+            spirit_world = get_spirit_rect_world()
+            spirit_rect = spirit_world.move(int(-cam.x), int(-cam.y))
+            glow = spirit_rect.inflate(24, 24)
+            pygame.draw.ellipse(screen, (140, 220, 255), glow)
+            pygame.draw.ellipse(screen, (40, 80, 120), glow, 3)
+            pygame.draw.ellipse(screen, (220, 250, 255), spirit_rect)
+            pygame.draw.ellipse(screen, (40, 80, 120), spirit_rect, 2)
+            if state.font and spirit_world.inflate(160, 160).collidepoint(player.pos.x, player.pos.y):
+                prompt = state.font.render("Press E to talk", True, (240, 240, 255))
+                screen.blit(prompt, (spirit_rect.centerx - prompt.get_width() // 2, spirit_rect.top - 30))
+
         icon_x = t_rect.centerx - 16
         icon_y = t_rect.centery - 16
         if LEATHER_ARMOR_UNLOCKED and not state.leather_armor_bought:
@@ -1258,7 +1586,17 @@ def draw_game(state: GameState):
     draw_player_stamina_bar_topleft(screen, player.stamina, settings.STAMINA_MAX, 10, 26)
 
     if player.health > 0:
-        p = player.pos - cam
+        p_screen = player.pos - cam
+        screen_out = screen
+        player_layer: pygame.Surface | None = None
+        layer_offset = pygame.Vector2(0, 0)
+        if player.is_dodging:
+            layer_size = max(220, int(settings.PLAYER_RADIUS * 7))
+            player_layer = pygame.Surface((layer_size, layer_size), pygame.SRCALPHA)
+            screen = player_layer
+            layer_offset = pygame.Vector2(layer_size / 2 - p_screen.x, layer_size / 2 - p_screen.y)
+
+        p = p_screen + layer_offset
         hip_y = p.y + settings.PLAYER_RADIUS * 0.6
         leg_len = settings.PLAYER_RADIUS + 16
         leg_swing = 0
@@ -1503,6 +1841,17 @@ def draw_game(state: GameState):
             )
             pygame.draw.line(screen, outline_color, base_left, base_right, 3)
 
+        if player_layer is not None:
+            dur = max(0.001, settings.DODGE_DURATION)
+            phase = 1.0 - max(0.0, min(1.0, player.dodge_timer / dur))
+            angle = phase * 360.0
+            if player.dodge_dir.x < 0:
+                angle = -angle
+            rotated = pygame.transform.rotozoom(player_layer, angle, 1.0)
+            rect = rotated.get_rect(center=(int(p_screen.x), int(p_screen.y)))
+            screen_out.blit(rotated, rect)
+            screen = screen_out
+
     for coin in state.coin_pickups:
         cpos = coin["pos"] - cam
         pygame.draw.circle(screen, (255, 215, 0), (int(cpos.x), int(cpos.y)), 10)
@@ -1531,9 +1880,14 @@ def draw_game(state: GameState):
         body_h = int(pig.radius * 1.2)
         body_rect = pygame.Rect(int(pp.x - body_w / 2), int(pp.y - body_h / 2), body_w, body_h)
 
-        PINK = (255, 160, 180)
-        DARK_PINK = (200, 120, 140)
-        SNOUT = (255, 140, 160)
+        if getattr(pig, "is_ally", False):
+            PINK = (140, 220, 255)
+            DARK_PINK = (60, 140, 200)
+            SNOUT = (180, 245, 255)
+        else:
+            PINK = (255, 160, 180)
+            DARK_PINK = (200, 120, 140)
+            SNOUT = (255, 140, 160)
 
         # Draw body (oval)
         pygame.draw.ellipse(screen, PINK, body_rect)
@@ -1639,7 +1993,7 @@ def draw_game(state: GameState):
             pygame.draw.line(screen, (220, 180, 70), (int(cross_left.x), int(cross_left.y)), (int(cross_right.x), int(cross_right.y)), 4)
             pygame.draw.circle(screen, (80, 50, 30), (int(arm_origin.x), int(arm_origin.y)), 5)
 
-        if not pig.is_boss:
+        if not pig.is_boss and not getattr(pig, "is_ally", False):
             draw_health_bar_above(screen, pp, pig.health, pig.max_health, radius=pig.radius)
 
     # Draw arrows
@@ -1706,8 +2060,8 @@ def draw_game(state: GameState):
         pygame.draw.rect(screen, (28, 34, 48), full_rect)  # dark but not gloomy
         pygame.draw.rect(screen, (90, 120, 150), full_rect, 6)
 
-        map_w = int(full_rect.width * 0.86)
-        map_h = int(full_rect.height * 0.86)
+        map_w = int(full_rect.width * 0.94)
+        map_h = int(full_rect.height * 0.94)
         map_rect = pygame.Rect(0, 0, map_w, map_h)
         map_rect.center = full_rect.center
         pygame.draw.rect(screen, (40, 52, 70), map_rect, border_radius=12)
@@ -1782,6 +2136,8 @@ def run():
     state = create_game_state(screen)
     if not state.intro_active:
         reset_round(state)
+        if getattr(state, "debug_start", None) == "post_bow":
+            apply_post_bow_start(state, coin_count=10)
 
     while state.running:
         events = pygame.event.get()
