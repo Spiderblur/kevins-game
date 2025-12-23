@@ -68,6 +68,28 @@ class GameState:
     spirit_spawned: bool = False
     spirit_reward_given: bool = False
     spirit_departed: bool = False
+    # Field enemy spawns are generated up-front and instantiated as the player explores.
+    pending_pig_spawns: list[pygame.Vector2] = field(default_factory=list)
+    # Quest UI (simple HUD line(s) + map markers)
+    quest_lines: list[str] = field(default_factory=list)
+    quest_markers: list[pygame.Vector2] = field(default_factory=list)
+    # Post-boss quest chain
+    post_boss_return_to_shopkeeper: bool = False
+    post_boss_shopkeeper_done: bool = False
+    villages_revealed: bool = False
+    quests_open: bool = False
+    camera_zoom: float = 1.0
+    # Waystones / fast travel
+    waystones: list[dict] = field(default_factory=list)
+    discovered_waystones: set[str] = field(default_factory=set)
+    toast_text: str = ""
+    toast_timer: float = 0.0
+    fast_travel_active: bool = False
+    fast_travel_timer: float = 0.0
+    fast_travel_duration: float = 1.2
+    fast_travel_from: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
+    fast_travel_to: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
+    fast_travel_swapped: bool = False
 
 
 def create_game_state(screen: pygame.Surface) -> GameState:
@@ -93,11 +115,11 @@ def create_game_state(screen: pygame.Surface) -> GameState:
     state.level_index = settings.FIELD_LEVEL_INDEX
     state.debug_start = "post_boss"
     # Give the player basic gear (the rest is applied in game.run after reset_round).
-    starter = ["Sword", "Shield", "Health Potion", "Bow", "Bacon of the Dead"]
+    starter = [settings.ITEM_RUSTY_SWORD, settings.ITEM_RUSTY_SHIELD, "Health Potion", settings.ITEM_OLD_BOW, "Bacon of the Dead"]
     for i, item in enumerate(starter):
         if i < len(state.inventory):
             state.inventory[i] = item
-    state.player.weapon_item = "Sword"
-    state.player.shield_item = "Shield"
+    state.player.weapon_item = settings.ITEM_RUSTY_SWORD
+    state.player.shield_item = settings.ITEM_RUSTY_SHIELD
     state.player.potion_count = 1
     return state

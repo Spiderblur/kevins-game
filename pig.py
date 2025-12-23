@@ -30,6 +30,7 @@ class PigState:
     is_ally: bool = False
     windup_timer: float = 0.0
     walk_cycle: float = 0.0
+    out_of_range_timer: float = 0.0
 
     def __post_init__(self):
         if self.health is None:

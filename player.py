@@ -41,6 +41,7 @@ class PlayerState:
     bow_cooldown: float = 0.0
     summon_item: str = ""
     stamina: float = settings.STAMINA_MAX
+    stamina_exhausted: bool = False
     is_sprinting: bool = False
     swing_recover_timer: float = 0.0
     last_attack_dir: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(1, 0))

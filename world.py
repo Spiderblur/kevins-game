@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 import random
 from typing import Tuple
 
@@ -8,8 +9,12 @@ import pygame
 import settings
 
 
-_FIELD_ENV_CACHE: dict[tuple[int, int], pygame.Surface] = {}
 _FIELD_MAP_CACHE: dict[tuple[int, int, int, int], pygame.Surface] = {}
+_FIELD_FEATURE_CACHE: dict[tuple[int, int], dict] = {}
+_FIELD_TILE_CACHE: "OrderedDict[tuple[int, int, int, int, int], pygame.Surface]" = OrderedDict()
+
+FIELD_TILE_SIZE = 640
+FIELD_TILE_CACHE_MAX = 64
 
 ENV_MARGIN = 24
 
@@ -312,13 +317,230 @@ def build_field_environment_surface(field_width: int, field_height: int) -> pyga
 
 
 def get_field_environment_surface(field_width: int, field_height: int) -> pygame.Surface:
+    # Legacy fallback for small fields only (the large field is rendered in tiles).
+    if field_width * field_height > 40_000_000:
+        tiny = pygame.Surface((1, 1))
+        tiny.fill((58, 145, 62))
+        return tiny
     key = (field_width, field_height)
-    env = _FIELD_ENV_CACHE.get(key)
-    if env is None:
-        env = build_field_environment_surface(field_width, field_height)
-        _FIELD_ENV_CACHE[key] = env
-        _FIELD_MAP_CACHE.clear()
-    return env
+    cached = _FIELD_MAP_CACHE.get((0, 0, field_width, field_height))
+    if cached is None or cached.get_size() != (field_width, field_height):
+        cached = build_field_environment_surface(field_width, field_height)
+        _FIELD_MAP_CACHE[(0, 0, field_width, field_height)] = cached
+    return cached
+
+
+def _get_field_features(field_width: int, field_height: int) -> dict:
+    key = (field_width, field_height)
+    cached = _FIELD_FEATURE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    road_w = 120
+    main_h = pygame.Rect(0, int(field_height * 0.58 - road_w / 2), field_width, road_w)
+    main_v = pygame.Rect(int(field_width * 0.34 - road_w / 2), 0, road_w, field_height)
+
+    shop_x = int(settings.SCREEN_WIDTH * 0.12)
+    shop_y = int(settings.SCREEN_HEIGHT * 0.60)
+    house_rects = get_field_house_rects(field_width, field_height)
+
+    plaza = _clamp_rect_in_bounds(pygame.Rect(shop_x - 260, shop_y - 260, 620, 460), field_width, field_height)
+    for r in house_rects:
+        plaza = plaza.union(r.inflate(160, 160))
+    plaza = _clamp_rect_in_bounds(plaza, field_width, field_height)
+
+    lane = _clamp_rect_in_bounds(
+        pygame.Rect(shop_x - road_w // 2, shop_y, road_w, main_h.centery - shop_y + road_w // 2),
+        field_width,
+        field_height,
+        margin=0,
+    )
+    lane_join = _clamp_rect_in_bounds(
+        pygame.Rect(0, main_h.top, int(field_width * 0.22), main_h.height),
+        field_width,
+        field_height,
+        margin=0,
+    )
+
+    arena = get_field_boss_arena_rect(field_width, field_height)
+    arena_walls = get_field_boss_arena_wall_rects(field_width, field_height)
+    arena_door = get_field_boss_arena_door_rect(field_width, field_height)
+
+    farms = get_field_farm_rects(field_width, field_height)
+    pond_rect = get_field_pond_rect(field_width, field_height)
+    ruins = get_field_ruins_rects(field_width, field_height)
+    shrine = get_field_shrine_rect(field_width, field_height)
+
+    features = {
+        "road_w": road_w,
+        "main_h": main_h,
+        "main_v": main_v,
+        "shop_x": shop_x,
+        "shop_y": shop_y,
+        "house_rects": house_rects,
+        "plaza": plaza,
+        "lane": lane,
+        "lane_join": lane_join,
+        "arena": arena,
+        "arena_walls": arena_walls,
+        "arena_door": arena_door,
+        "farms": farms,
+        "pond": pond_rect,
+        "ruins": ruins,
+        "shrine": shrine,
+    }
+    _FIELD_FEATURE_CACHE[key] = features
+    return features
+
+
+def _draw_grass_tile(tile: pygame.Surface, tile_world: pygame.Rect):
+    grass_base = (58, 145, 62)
+    grass_light = (76, 175, 80)
+    tile.fill(grass_base)
+
+    stripe_h = 10
+    step = 40
+    first = (-tile_world.top) % step
+    for yy in range(first, tile.get_height(), step):
+        pygame.draw.rect(tile, grass_light, pygame.Rect(0, yy, tile.get_width(), stripe_h))
+
+
+def _draw_tree_tile(surface: pygame.Surface, pos_world: pygame.Vector2, size: int, tile_world: pygame.Rect):
+    local = pygame.Vector2(pos_world.x - tile_world.left, pos_world.y - tile_world.top)
+    _draw_tree(surface, local, size)
+
+
+def _get_field_tile_surface(field_width: int, field_height: int, tile_x: int, tile_y: int, tile_size: int = FIELD_TILE_SIZE) -> pygame.Surface:
+    key = (field_width, field_height, tile_size, tile_x, tile_y)
+    cached = _FIELD_TILE_CACHE.get(key)
+    if cached is not None:
+        _FIELD_TILE_CACHE.move_to_end(key)
+        return cached
+
+    tile_world = pygame.Rect(tile_x * tile_size, tile_y * tile_size, tile_size, tile_size)
+    tile = pygame.Surface((tile_size, tile_size))
+    _draw_grass_tile(tile, tile_world)
+
+    f = _get_field_features(field_width, field_height)
+    main_h: pygame.Rect = f["main_h"]
+    main_v: pygame.Rect = f["main_v"]
+    plaza: pygame.Rect = f["plaza"]
+    lane: pygame.Rect = f["lane"]
+    lane_join: pygame.Rect = f["lane_join"]
+    pond_rect: pygame.Rect = f["pond"]
+    arena: pygame.Rect = f["arena"]
+    arena_walls: list[pygame.Rect] = f["arena_walls"]
+    arena_door: pygame.Rect = f["arena_door"]
+
+    def draw_rect(func, rect: pygame.Rect, *args, **kwargs):
+        if not tile_world.colliderect(rect):
+            return
+        func(tile, rect.move(-tile_world.left, -tile_world.top), *args, **kwargs)
+
+    draw_rect(_draw_road, main_h)
+    draw_rect(_draw_road, main_v)
+
+    if tile_world.colliderect(plaza):
+        pr = plaza.move(-tile_world.left, -tile_world.top)
+        pygame.draw.rect(tile, (130, 130, 140), pr, border_radius=12)
+        pygame.draw.rect(tile, (80, 80, 90), pr, 6, border_radius=12)
+    draw_rect(_draw_road, lane)
+    draw_rect(_draw_road, lane_join)
+
+    for i, r in enumerate(f["house_rects"]):
+        if not tile_world.colliderect(r):
+            continue
+        roof = (160, 80, 80) if i % 2 == 0 else (140, 90, 60)
+        _draw_house(tile, r.move(-tile_world.left, -tile_world.top), roof_color=roof)
+
+    if tile_world.colliderect(arena):
+        yard = arena.inflate(-72, -72).move(-tile_world.left, -tile_world.top)
+        pygame.draw.rect(tile, (70, 90, 75), yard, border_radius=18)
+        pygame.draw.rect(tile, (55, 70, 60), yard, 3, border_radius=18)
+    wall_fill = (130, 130, 140)
+    wall_edge = (80, 80, 90)
+    for wall in arena_walls:
+        if not tile_world.colliderect(wall):
+            continue
+        w = wall.move(-tile_world.left, -tile_world.top)
+        pygame.draw.rect(tile, wall_fill, w)
+        pygame.draw.rect(tile, wall_edge, w, 4)
+    if tile_world.colliderect(arena_door):
+        d = arena_door.move(-tile_world.left, -tile_world.top)
+        pygame.draw.rect(tile, wall_edge, d.inflate(12, 8), 3)
+
+    for r in f["farms"]:
+        if not tile_world.colliderect(r):
+            continue
+        _draw_farm(tile, r.move(-tile_world.left, -tile_world.top))
+
+    if tile_world.colliderect(pond_rect):
+        pr = pond_rect.move(-tile_world.left, -tile_world.top)
+        pygame.draw.ellipse(tile, (40, 110, 170), pr)
+        pygame.draw.ellipse(tile, (170, 220, 255), pr.inflate(-18, -18), 4)
+        pygame.draw.ellipse(tile, (20, 70, 120), pr, 4)
+
+    ruins = f["ruins"]
+    for idx, rr in enumerate(ruins):
+        if not tile_world.colliderect(rr):
+            continue
+        rlocal = rr.move(-tile_world.left, -tile_world.top)
+        if idx == 0:
+            pygame.draw.rect(tile, (110, 110, 120), rlocal, border_radius=14)
+            pygame.draw.rect(tile, (70, 70, 80), rlocal, 6, border_radius=14)
+        elif idx == 1:
+            pygame.draw.rect(tile, (90, 90, 100), rlocal, border_radius=10)
+            pygame.draw.rect(tile, (55, 55, 65), rlocal, 4, border_radius=10)
+        else:
+            pygame.draw.rect(tile, (120, 120, 130), rlocal, border_radius=10)
+            pygame.draw.rect(tile, (60, 60, 70), rlocal, 3, border_radius=10)
+
+    shrine = f["shrine"]
+    if tile_world.colliderect(shrine):
+        s = shrine.move(-tile_world.left, -tile_world.top)
+        pygame.draw.rect(tile, (170, 170, 190), s, border_radius=12)
+        pygame.draw.rect(tile, (90, 90, 110), s, 6, border_radius=12)
+        roof = [
+            (s.left - 14, s.top + 18),
+            (s.centerx, s.top - 90),
+            (s.right + 14, s.top + 18),
+        ]
+        pygame.draw.polygon(tile, (130, 90, 110), roof)
+        pygame.draw.polygon(tile, (70, 50, 70), roof, 5)
+
+    rng = random.Random((tile_x * 92821) ^ (tile_y * 68917) ^ (field_width * 37) ^ (field_height * 97) ^ 1337)
+    tree_attempts = 18
+    for _ in range(tree_attempts):
+        x = rng.randrange(tile_world.left, tile_world.right)
+        y = rng.randrange(tile_world.top, tile_world.bottom)
+        if abs(y - main_h.centery) < 120 or abs(x - main_v.centerx) < 120:
+            continue
+        if pond_rect.collidepoint(x, y):
+            continue
+        if arena.inflate(120, 120).collidepoint(x, y):
+            continue
+        if plaza.collidepoint(x, y) or lane.collidepoint(x, y) or lane_join.collidepoint(x, y):
+            continue
+        size = rng.randrange(26, 52)
+        _draw_tree_tile(tile, pygame.Vector2(x, y), size, tile_world)
+
+    rock_shadow = (80, 80, 80)
+    rock_color = (120, 120, 120)
+    for _ in range(2):
+        rx = rng.randrange(tile_world.left, tile_world.right)
+        ry = rng.randrange(tile_world.top, tile_world.bottom)
+        if pond_rect.inflate(60, 60).collidepoint(rx, ry):
+            continue
+        local = (int(rx - tile_world.left), int(ry - tile_world.top))
+        pygame.draw.circle(tile, rock_shadow, (local[0] + 10, local[1] + 10), 20)
+        pygame.draw.circle(tile, rock_color, local, 20)
+        pygame.draw.circle(tile, (180, 180, 180), (local[0] - 6, local[1] - 8), 8)
+
+    _FIELD_TILE_CACHE[key] = tile
+    _FIELD_TILE_CACHE.move_to_end(key)
+    while len(_FIELD_TILE_CACHE) > FIELD_TILE_CACHE_MAX:
+        _FIELD_TILE_CACHE.popitem(last=False)
+    return tile
 
 
 def get_field_map_surface(target_size: tuple[int, int], field_width: int, field_height: int) -> pygame.Surface:
@@ -327,18 +549,40 @@ def get_field_map_surface(target_size: tuple[int, int], field_width: int, field_
     cached = _FIELD_MAP_CACHE.get(key)
     if cached is not None:
         return cached
-    env = get_field_environment_surface(field_width, field_height)
-    scaled = pygame.transform.smoothscale(env, target_size)
-    _FIELD_MAP_CACHE[key] = scaled
-    return scaled
+    surface = pygame.Surface(target_size)
+    grass_base = (58, 145, 62)
+    grass_light = (76, 175, 80)
+    surface.fill(grass_base)
+    # light horizontal bands so the map isn't a flat green slab
+    stripe_h = 3
+    step = 18
+    for yy in range(0, target_size[1], step):
+        pygame.draw.rect(surface, grass_light, pygame.Rect(0, yy, target_size[0], stripe_h))
+    _FIELD_MAP_CACHE[key] = surface
+    return surface
 
 
 def blit_field_environment(screen: pygame.Surface, cam: pygame.Vector2, field_width: int, field_height: int):
-    env = get_field_environment_surface(field_width, field_height)
-    screen.blit(env, (-int(cam.x), -int(cam.y)))
+    screen_w, screen_h = screen.get_width(), screen.get_height()
+    tile_size = FIELD_TILE_SIZE
+    start_x = max(0, int(cam.x) // tile_size)
+    start_y = max(0, int(cam.y) // tile_size)
+    end_x = min((field_width - 1) // tile_size, int((cam.x + screen_w) // tile_size) + 1)
+    end_y = min((field_height - 1) // tile_size, int((cam.y + screen_h) // tile_size) + 1)
+
+    for ty in range(start_y, end_y + 1):
+        for tx in range(start_x, end_x + 1):
+            tile = _get_field_tile_surface(field_width, field_height, tx, ty, tile_size=tile_size)
+            screen.blit(tile, (tx * tile_size - int(cam.x), ty * tile_size - int(cam.y)))
 
 
-def draw_background(screen: pygame.Surface, cam_offset: pygame.Vector2, level_index: int, field_width=4500, field_height=3200):
+def draw_background(
+    screen: pygame.Surface,
+    cam_offset: pygame.Vector2,
+    level_index: int,
+    field_width: int = settings.FIELD_WORLD_WIDTH,
+    field_height: int = settings.FIELD_WORLD_HEIGHT,
+):
     """Legacy helper; prefer blit_field_environment for the field."""
     if level_index == settings.FIELD_LEVEL_INDEX:
         blit_field_environment(screen, cam_offset, field_width, field_height)
