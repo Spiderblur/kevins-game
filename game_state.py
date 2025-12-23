@@ -91,9 +91,9 @@ def create_game_state(screen: pygame.Surface) -> GameState:
     # Debug start: skip story intro and begin in the field after the bow is obtained.
     state.intro_active = False
     state.level_index = settings.FIELD_LEVEL_INDEX
-    state.debug_start = "post_bow"
+    state.debug_start = "post_boss"
     # Give the player basic gear (the rest is applied in game.run after reset_round).
-    starter = ["Sword", "Shield", "Health Potion", "Bow"]
+    starter = ["Sword", "Shield", "Health Potion", "Bow", "Bacon of the Dead"]
     for i, item in enumerate(starter):
         if i < len(state.inventory):
             state.inventory[i] = item

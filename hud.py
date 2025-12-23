@@ -5,10 +5,13 @@ import settings
 
 def draw_player_health_bar_topleft(screen: pygame.Surface, current: int, maximum: int, x=10, y=10):
     bar_width = 80
+    if maximum > settings.PLAYER_MAX_HEALTH:
+        bar_width = 92
     bar_height = 10
     pygame.draw.rect(screen, (100, 100, 100), (x, y, bar_width, bar_height))
     ratio = max(0, current) / maximum if maximum > 0 else 0
     pygame.draw.rect(screen, (255, 0, 0), (x, y, int(bar_width * ratio), bar_height))
+    return bar_width
 
 
 def draw_player_stamina_bar_topleft(screen: pygame.Surface, current: float, maximum: float, x=10, y=24):
@@ -17,6 +20,7 @@ def draw_player_stamina_bar_topleft(screen: pygame.Surface, current: float, maxi
     pygame.draw.rect(screen, (70, 70, 70), (x, y, bar_width, bar_height))
     ratio = max(0.0, current) / maximum if maximum > 0 else 0
     pygame.draw.rect(screen, (50, 200, 80), (x, y, int(bar_width * ratio), bar_height))
+    return bar_width
 
 
 def draw_health_bar_above(screen: pygame.Surface, center_pos: pygame.Vector2, current: int, maximum: int, radius: int = settings.PIG_RADIUS):

@@ -1,4 +1,5 @@
 import math
+import random
 import sys
 from typing import List
 
@@ -38,8 +39,13 @@ from world import (
     get_field_boss_arena_door_rect,
     get_field_boss_arena_rect,
     get_field_boss_arena_wall_rects,
+    get_field_farm_rects,
     get_field_house_solid_rects,
+    get_field_house_rects,
     get_field_map_surface,
+    get_field_pond_rect,
+    get_field_ruins_rects,
+    get_field_shrine_rect,
     get_room3_table_rect,
     get_shopkeeper_rect,
 )
@@ -142,6 +148,54 @@ def apply_post_bow_start(state: GameState, coin_count: int = 10):
     state.player.bow_equipped = True
 
 
+def apply_post_boss_start(state: GameState, coin_count: int = 75):
+    """Dev shortcut: start in the field after the pig boss is defeated."""
+    state.level_index = FIELD_LEVEL
+    state.coin_count = coin_count
+    state.has_map = True
+    state.shopkeeper_greeted = True
+    state.map_tested = True
+    state.rumor_shown = True
+    state.evil_spawned = True
+    state.evil_defeated = True
+    state.bow_given = True
+    state.quest_explained = True
+    state.treasure_hint_visible = False
+
+    # Boss already cleared; prevent re-spawning the encounter.
+    allies = [p for p in state.pigs if getattr(p, "is_ally", False) and p.health > 0]
+    state.pigs = allies
+    spawn_field_roaming_pigs(state, count=35)
+    state.boss_spawned = True
+    state.boss_defeated = True
+    state.boss_door_closed = False
+    state.boss_reward_spawned = True
+    state.spirit_spawned = True
+    state.spirit_reward_given = True
+    state.spirit_departed = True
+    state.lock_target = None
+
+    # Grant post-boss loot and equip it.
+    if "Bacon of the Dead" not in state.inventory:
+        add_item_to_inventory(state, "Bacon of the Dead")
+    state.player.summon_item = "Bacon of the Dead"
+
+    # Ensure the bow exists and is equipped for quick testing.
+    if "Bow" not in state.inventory:
+        add_item_to_inventory(state, "Bow")
+    state.player.bow_equipped = True
+    state.player.bow_cooldown = 0.0
+
+    # Apply spirit reward bonus (post-boss).
+    state.player.max_health += settings.SPIRIT_HEALTH_BONUS
+    state.player.health = state.player.max_health
+
+    # Spawn the player near the boss arena exit.
+    door = get_field_boss_arena_door_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
+    state.player.pos.update(door.centerx, door.bottom + state.player.radius + 90)
+    update_camera_follow(state)
+
+
 def get_spirit_rect_world() -> pygame.Rect:
     """World rect for the post-boss spirit that blocks the boss arena exit."""
     door = get_field_boss_arena_door_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
@@ -226,6 +280,44 @@ def spawn_pig_boss_encounter(state: GameState):
     state.boss_door_closed = True
 
 
+def spawn_field_roaming_pigs(state: GameState, count: int = 35):
+    """Scatter pigs across the overworld field."""
+    if state.level_index != FIELD_LEVEL:
+        return
+    rng = random.Random(pygame.time.get_ticks())
+    arena = get_field_boss_arena_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT).inflate(160, 160)
+    pond = get_field_pond_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT).inflate(40, 40)
+    farms = [r.inflate(40, 40) for r in get_field_farm_rects(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)]
+
+    table = get_room3_table_rect(state.screen, pygame.Vector2(0, 0)).inflate(900, 700)
+    keeper = get_shopkeeper_rect(state.screen).inflate(900, 700)
+    houses = [r.inflate(120, 120) for r in get_field_house_solid_rects(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)]
+
+    def blocked(x: float, y: float) -> bool:
+        if arena.collidepoint(x, y) or pond.collidepoint(x, y):
+            return True
+        if table.collidepoint(x, y) or keeper.collidepoint(x, y):
+            return True
+        if any(r.collidepoint(x, y) for r in farms):
+            return True
+        if any(r.collidepoint(x, y) for r in houses):
+            return True
+        return False
+
+    pigs: list = []
+    tries = max(200, count * 35)
+    for _ in range(tries):
+        if len(pigs) >= count:
+            break
+        x = rng.uniform(settings.PLAYER_RADIUS, ROOM3_FIELD_WIDTH - settings.PLAYER_RADIUS)
+        y = rng.uniform(settings.PLAYER_RADIUS, ROOM3_FIELD_HEIGHT - settings.PLAYER_RADIUS)
+        if blocked(x, y):
+            continue
+        pigs.append(make_pig(pygame.Vector2(x, y)))
+
+    state.pigs.extend(pigs)
+
+
 def start_field_intro(state: GameState):
     """Begin the shopkeeper's initial field script (map intro)."""
     if state.level_index != FIELD_LEVEL or state.shopkeeper_greeted:
@@ -270,6 +362,12 @@ def push_circle_out_of_circle(center: pygame.Vector2, radius: float, other_cente
         dir_vec = delta / dist
         center.x += dir_vec.x * push
         center.y += dir_vec.y * push
+
+
+def clamp_circle_in_rect(center: pygame.Vector2, radius: float, rect: pygame.Rect):
+    """Clamp a circle center so the whole circle stays inside rect."""
+    center.x = max(rect.left + radius, min(center.x, rect.right - radius))
+    center.y = max(rect.top + radius, min(center.y, rect.bottom - radius))
 
 
 def start_dialogue(state: GameState, lines: List[str], *, tag: str | None = None):
@@ -653,8 +751,9 @@ def reset_round(state: GameState):
         n = 2
         state.pigs = spawn_pigs(n, state.level_index, state.screen)
     elif state.level_index == FIELD_LEVEL:
-        # Field: no pigs until the shopkeeper warns you
+        # Field: roamers everywhere
         state.pigs = []
+        spawn_field_roaming_pigs(state, count=35)
     else:
         state.pigs = []
 
@@ -999,6 +1098,7 @@ def update_game(state: GameState):
             move.x -= 1
         if keys[pygame.K_d]:
             move.x += 1
+        move_input = pygame.Vector2(move)
         if player.is_dodging:
             player.pos += player.dodge_dir * player.speed * settings.DODGE_SPEED_MULT * state.dt
             player.dodge_timer -= state.dt
@@ -1053,18 +1153,22 @@ def update_game(state: GameState):
             arena = get_field_boss_arena_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
             if arena.collidepoint(player.pos.x, player.pos.y) and not getattr(state, "boss_spawned", False):
                 spawn_pig_boss_encounter(state)
+            # If the boss door is closed, keep the player inside the arena interior so they can't clip out.
+            if getattr(state, "boss_door_closed", False):
+                thickness = 36
+                arena_inner = arena.inflate(-thickness * 2, -thickness * 2)
+                clamp_circle_in_rect(player.pos, settings.PLAYER_RADIUS, arena_inner)
 
-        # Aim either at lock-on target or mouse
+        # Facing: lock-on target (Tab) or last movement direction.
         lock = state.lock_target if state.lock_target and state.lock_target.health > 0 else None
         if lock is None:
             state.lock_target = None
-            mouse_screen = pygame.Vector2(pygame.mouse.get_pos())
-            mouse_world = mouse_screen + state.camera_offset
-            to_mouse = mouse_world - player.pos
-            if to_mouse.length_squared() > 0:
-                target_facing = to_mouse.normalize()
-                # Smooth interpolation for reduced sensitivity (0.15 = 15% move towards target per frame)
-                player.facing = player.facing.lerp(target_facing, 0.15)
+            if player.is_dodging and player.dodge_dir.length_squared() > 0:
+                player.facing = pygame.Vector2(player.dodge_dir).normalize()
+            elif move_input.length_squared() > 0:
+                target_facing = move_input.normalize()
+                # Smooth interpolation for reduced jitter (25% move towards target per frame).
+                player.facing = player.facing.lerp(target_facing, 0.25)
         else:
             to_target = lock.pos - player.pos
             if to_target.length_squared() > 0:
@@ -1081,10 +1185,21 @@ def update_game(state: GameState):
     arena_walls: list[pygame.Rect] = []
     arena_door = pygame.Rect(0, 0, 0, 0)
     boss_door_closed = False
+    arena_inner: pygame.Rect | None = None
+    field_table_rect: pygame.Rect | None = None
+    field_keeper_rect: pygame.Rect | None = None
+    field_house_solids: list[pygame.Rect] = []
     if state.level_index == FIELD_LEVEL:
         arena_walls = get_field_boss_arena_wall_rects(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
         arena_door = get_field_boss_arena_door_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
         boss_door_closed = getattr(state, "boss_door_closed", False)
+        field_table_rect = get_room3_table_rect(state.screen, pygame.Vector2(0, 0))
+        field_keeper_rect = get_shopkeeper_rect(state.screen)
+        field_house_solids = get_field_house_solid_rects(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
+        if boss_door_closed:
+            thickness = 36
+            arena = get_field_boss_arena_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
+            arena_inner = arena.inflate(-thickness * 2, -thickness * 2)
 
     view_rect_world = pygame.Rect(
         int(state.camera_offset.x),
@@ -1154,6 +1269,8 @@ def update_game(state: GameState):
                 push_circle_out_of_rect(pig.pos, pig.radius, wall_rect)
             if boss_door_closed:
                 push_circle_out_of_rect(pig.pos, pig.radius, arena_door)
+            if boss_door_closed and arena_inner is not None:
+                clamp_circle_in_rect(pig.pos, pig.radius, arena_inner)
 
     # Prevent pigs from overlapping/squishing together (simple circle separation).
     live_pigs = [p for p in state.pigs if p.health > 0]
@@ -1183,11 +1300,35 @@ def update_game(state: GameState):
             for pig in live_pigs:
                 pig.pos.x = max(pig.radius, min(pig.pos.x, world_w - pig.radius))
                 pig.pos.y = max(pig.radius, min(pig.pos.y, world_h - pig.radius))
-                if state.level_index == FIELD_LEVEL and pig.in_boss_arena:
+                if state.level_index == FIELD_LEVEL:
+                    if field_table_rect is not None:
+                        push_circle_out_of_rect(pig.pos, pig.radius, field_table_rect)
+                    if field_keeper_rect is not None:
+                        push_circle_out_of_rect(pig.pos, pig.radius, field_keeper_rect)
+                    for house_rect in field_house_solids:
+                        push_circle_out_of_rect(pig.pos, pig.radius, house_rect)
                     for wall_rect in arena_walls:
                         push_circle_out_of_rect(pig.pos, pig.radius, wall_rect)
                     if boss_door_closed or (state.spirit_spawned and not state.spirit_departed):
                         push_circle_out_of_rect(pig.pos, pig.radius, arena_door)
+                    if boss_door_closed and pig.in_boss_arena and arena_inner is not None:
+                        clamp_circle_in_rect(pig.pos, pig.radius, arena_inner)
+
+    # Keep field pigs out of major solids (table/shop/houses/arena walls).
+    if state.level_index == FIELD_LEVEL and live_pigs:
+        for pig in live_pigs:
+            if field_table_rect is not None:
+                push_circle_out_of_rect(pig.pos, pig.radius, field_table_rect)
+            if field_keeper_rect is not None:
+                push_circle_out_of_rect(pig.pos, pig.radius, field_keeper_rect)
+            for house_rect in field_house_solids:
+                push_circle_out_of_rect(pig.pos, pig.radius, house_rect)
+            for wall_rect in arena_walls:
+                push_circle_out_of_rect(pig.pos, pig.radius, wall_rect)
+            if boss_door_closed or (state.spirit_spawned and not state.spirit_departed):
+                push_circle_out_of_rect(pig.pos, pig.radius, arena_door)
+            if boss_door_closed and pig.in_boss_arena and arena_inner is not None:
+                clamp_circle_in_rect(pig.pos, pig.radius, arena_inner)
 
     # Treat pigs as solid so the player can't overlap them.
     if player.health > 0 and live_pigs:
@@ -1211,6 +1352,10 @@ def update_game(state: GameState):
                     settings.PLAYER_RADIUS,
                     get_field_boss_arena_door_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT),
                 )
+                thickness = 36
+                arena = get_field_boss_arena_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
+                arena_inner = arena.inflate(-thickness * 2, -thickness * 2)
+                clamp_circle_in_rect(player.pos, settings.PLAYER_RADIUS, arena_inner)
             if state.spirit_spawned and not state.spirit_departed:
                 push_circle_out_of_rect(
                     player.pos,
@@ -1578,12 +1723,13 @@ def draw_game(state: GameState):
         screen.blit(label_surf, (t_rect.centerx - label_surf.get_width() // 2, t_rect.top - 28))
         screen.blit(tip_surf, (t_rect.centerx - tip_surf.get_width() // 2, t_rect.bottom + 14))
 
-    draw_player_health_bar_topleft(screen, player.health, player.max_health, 10, 10)
-    draw_potion_icon(screen, 100, 6, enabled="heal" if player.potion_count > 0 else None)
-    draw_coin_icon(screen, 124, 6, enabled=True)
+    health_w = draw_player_health_bar_topleft(screen, player.health, player.max_health, 10, 10)
+    stamina_w = draw_player_stamina_bar_topleft(screen, player.stamina, settings.STAMINA_MAX, 10, 26)
+    hud_right = 10 + max(health_w, stamina_w)
+    draw_potion_icon(screen, hud_right + 10, 6, enabled="heal" if player.potion_count > 0 else None)
+    draw_coin_icon(screen, hud_right + 34, 6, enabled=True)
     coins_text = state.font.render(f"x {state.coin_count}", True, (255, 255, 255))
-    screen.blit(coins_text, (156, 6))
-    draw_player_stamina_bar_topleft(screen, player.stamina, settings.STAMINA_MAX, 10, 26)
+    screen.blit(coins_text, (hud_right + 66, 6))
 
     if player.health > 0:
         p_screen = player.pos - cam
@@ -1714,7 +1860,6 @@ def draw_game(state: GameState):
         pygame.draw.rect(screen, (60, 40, 20), belt_rect, border_radius=4)
         hem_rect = pygame.Rect(inner_body.left, inner_body.bottom - 10, inner_body.width, 8)
         pygame.draw.rect(screen, (80, 40, 40), hem_rect, border_radius=3)
-        pygame.draw.circle(screen, head_color, head_center, head_radius)
 
         left_arm_start = pygame.Vector2(p.x - arm_x_offset, shoulder_y)
         if player.swing_timer > 0 or player.swing_recover_timer > 0:
@@ -1730,7 +1875,7 @@ def draw_game(state: GameState):
         pygame.draw.line(screen, arm_color, left_arm_start, left_arm_end_vec, 8)
         pygame.draw.line(screen, arm_color, right_arm_start, right_arm_end_vec, 8)
 
-        # Weapon held in right hand (moves with arm/mouse)
+        # Weapon held in right hand (moves with arm/facing)
         sword_dir = arm_dir
         grip_len = int(settings.SWORD_LENGTH * 0.3 * reach_mult)
         blade_len = int(settings.SWORD_LENGTH * reach_mult)
@@ -1840,6 +1985,26 @@ def draw_game(state: GameState):
                 4,
             )
             pygame.draw.line(screen, outline_color, base_left, base_right, 3)
+
+        # Draw head last so arms/weapons don't cut across it.
+        pygame.draw.circle(screen, head_color, head_center, head_radius)
+        # Eyes: only look left/right when facing that way.
+        look_x = float(player.facing.x)
+        if abs(look_x) < 0.35:
+            pupil_dir = pygame.Vector2(0, 0)
+        else:
+            pupil_dir = pygame.Vector2(1 if look_x > 0 else -1, 0)
+        eye_sep = head_radius * 0.45
+        eye_drop = head_radius * 0.12
+        eye_r = max(3, int(head_radius * 0.20))
+        pupil_r = max(2, int(eye_r * 0.65))
+        pupil_max = max(0.0, eye_r - pupil_r - 1.0)
+        pupil_off = pupil_dir * pupil_max
+        for side in (-1, 1):
+            eye_center = head_center + pygame.Vector2(side * eye_sep, eye_drop)
+            pygame.draw.circle(screen, (250, 250, 250), (int(eye_center.x), int(eye_center.y)), eye_r)
+            pupil_center = eye_center + pupil_off
+            pygame.draw.circle(screen, (20, 20, 20), (int(pupil_center.x), int(pupil_center.y)), pupil_r)
 
         if player_layer is not None:
             dur = max(0.001, settings.DODGE_DURATION)
@@ -2060,8 +2225,8 @@ def draw_game(state: GameState):
         pygame.draw.rect(screen, (28, 34, 48), full_rect)  # dark but not gloomy
         pygame.draw.rect(screen, (90, 120, 150), full_rect, 6)
 
-        map_w = int(full_rect.width * 0.94)
-        map_h = int(full_rect.height * 0.94)
+        map_w = int(full_rect.width * 0.985)
+        map_h = int(full_rect.height * 0.975)
         map_rect = pygame.Rect(0, 0, map_w, map_h)
         map_rect.center = full_rect.center
         pygame.draw.rect(screen, (40, 52, 70), map_rect, border_radius=12)
@@ -2069,17 +2234,58 @@ def draw_game(state: GameState):
         screen.blit(env_map, map_rect.topleft)
         pygame.draw.rect(screen, (120, 150, 190), map_rect, 3, border_radius=12)
 
+        scale_x = map_rect.width / ROOM3_FIELD_WIDTH
+        scale_y = map_rect.height / ROOM3_FIELD_HEIGHT
+
+        def world_to_map(pos_world: pygame.Vector2) -> pygame.Vector2:
+            return pygame.Vector2(map_rect.left + pos_world.x * scale_x, map_rect.top + pos_world.y * scale_y)
+
+        def clamp_map(pos: pygame.Vector2, pad: int = 16) -> pygame.Vector2:
+            return pygame.Vector2(
+                max(map_rect.left + pad, min(pos.x, map_rect.right - pad)),
+                max(map_rect.top + pad, min(pos.y, map_rect.bottom - pad)),
+            )
+
+        def world_rect_to_map(rect_world: pygame.Rect) -> pygame.Rect:
+            tl = world_to_map(pygame.Vector2(rect_world.left, rect_world.top))
+            w = max(1, int(rect_world.width * scale_x))
+            h = max(1, int(rect_world.height * scale_y))
+            return pygame.Rect(int(tl.x), int(tl.y), w, h)
+
+        # Light grid for easier navigation
+        for i in range(1, 10):
+            gx = int(map_rect.left + map_rect.width * (i / 10))
+            gy = int(map_rect.top + map_rect.height * (i / 10))
+            pygame.draw.line(screen, (70, 90, 110), (gx, map_rect.top + 6), (gx, map_rect.bottom - 6), 1)
+            pygame.draw.line(screen, (70, 90, 110), (map_rect.left + 6, gy), (map_rect.right - 6, gy), 1)
+
+        # Landmarks overlay (icon colors are distinct from the map image)
+        arena_rect = world_rect_to_map(get_field_boss_arena_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT))
+        pygame.draw.rect(screen, (255, 120, 120), arena_rect, 3, border_radius=10)
+
+        pond_rect = world_rect_to_map(get_field_pond_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT))
+        pygame.draw.ellipse(screen, (110, 190, 255), pond_rect, 3)
+
+        for farm in get_field_farm_rects(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT):
+            pygame.draw.rect(screen, (120, 240, 150), world_rect_to_map(farm), 3, border_radius=8)
+
+        for house in get_field_house_rects(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT):
+            pygame.draw.rect(screen, (240, 220, 180), world_rect_to_map(house), 2, border_radius=6)
+
+        for rr in get_field_ruins_rects(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT):
+            pygame.draw.rect(screen, (200, 200, 220), world_rect_to_map(rr), 2, border_radius=10)
+
+        shrine = world_rect_to_map(get_field_shrine_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT))
+        pygame.draw.rect(screen, (210, 190, 255), shrine, 3, border_radius=10)
+
+        table = get_room3_table_rect(state.screen, pygame.Vector2(0, 0))
+        pygame.draw.rect(screen, (255, 220, 80), world_rect_to_map(table), 3, border_radius=8)
+
         # Player arrow icon: position reflects field world coords (scaled down to the map).
         arrow_color = (255, 220, 80)
         px = max(0, min(player.pos.x, ROOM3_FIELD_WIDTH))
         py = max(0, min(player.pos.y, ROOM3_FIELD_HEIGHT))
-        arrow_pos = pygame.Vector2(
-            map_rect.left + (px / ROOM3_FIELD_WIDTH) * map_rect.width,
-            map_rect.top + (py / ROOM3_FIELD_HEIGHT) * map_rect.height,
-        )
-        # Keep arrow within the map border
-        arrow_pos.x = max(map_rect.left + 16, min(arrow_pos.x, map_rect.right - 16))
-        arrow_pos.y = max(map_rect.top + 16, min(arrow_pos.y, map_rect.bottom - 16))
+        arrow_pos = clamp_map(world_to_map(pygame.Vector2(px, py)), pad=16)
         pygame.draw.polygon(
             screen,
             arrow_color,
@@ -2099,19 +2305,12 @@ def draw_game(state: GameState):
             ],
             2,
         )
-        pygame.draw.circle(screen, arrow_color, (int(arrow_pos.x), int(arrow_pos.y + 6)), 5)
-        pygame.draw.circle(screen, (40, 30, 10), (int(arrow_pos.x), int(arrow_pos.y + 6)), 5, 2)
 
         # Quest point on the map (fixed world position)
         if state.treasure_hint_visible:
             qx = max(0, min(QUEST_POS_WORLD.x, ROOM3_FIELD_WIDTH))
             qy = max(0, min(QUEST_POS_WORLD.y, ROOM3_FIELD_HEIGHT))
-            quest_pos = pygame.Vector2(
-                map_rect.left + (qx / ROOM3_FIELD_WIDTH) * map_rect.width,
-                map_rect.top + (qy / ROOM3_FIELD_HEIGHT) * map_rect.height,
-            )
-            quest_pos.x = max(map_rect.left + 16, min(quest_pos.x, map_rect.right - 16))
-            quest_pos.y = max(map_rect.top + 16, min(quest_pos.y, map_rect.bottom - 16))
+            quest_pos = clamp_map(world_to_map(pygame.Vector2(qx, qy)), pad=16)
             # quest point: solid circle with a thin yellow outline
             quest_fill = (255, 220, 80)
             quest_outline = (255, 255, 120)
@@ -2122,9 +2321,21 @@ def draw_game(state: GameState):
 
         title = state.font.render("Map", True, (230, 240, 255))
         screen.blit(title, (map_rect.left + 12, map_rect.top + 12))
+        legend_y = map_rect.top + 44
+        legend_items = [
+            ("Arena", (255, 120, 120)),
+            ("Pond", (110, 190, 255)),
+            ("Farms", (120, 240, 150)),
+            ("Shop", (255, 220, 80)),
+            ("Shrine", (210, 190, 255)),
+        ]
         if state.treasure_hint_visible:
-            legend = state.font.render("Yellow circle = quest", True, (180, 200, 220))
-            screen.blit(legend, (map_rect.left + 12, map_rect.top + 44))
+            legend_items.insert(0, ("Quest", (255, 220, 80)))
+        for label, col in legend_items[:6]:
+            pygame.draw.rect(screen, col, pygame.Rect(map_rect.left + 12, legend_y + 6, 14, 14), border_radius=3)
+            text = state.font.render(label, True, (180, 200, 220))
+            screen.blit(text, (map_rect.left + 32, legend_y))
+            legend_y += 28
         hint = state.font.render("Press M to close", True, (180, 200, 220))
         screen.blit(hint, (map_rect.left + 12, map_rect.bottom - 32))
         return
@@ -2136,8 +2347,11 @@ def run():
     state = create_game_state(screen)
     if not state.intro_active:
         reset_round(state)
-        if getattr(state, "debug_start", None) == "post_bow":
+        start_mode = getattr(state, "debug_start", None)
+        if start_mode == "post_bow":
             apply_post_bow_start(state, coin_count=10)
+        elif start_mode == "post_boss":
+            apply_post_boss_start(state, coin_count=75)
 
     while state.running:
         events = pygame.event.get()

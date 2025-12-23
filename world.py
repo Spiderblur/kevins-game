@@ -150,6 +150,35 @@ def get_field_boss_arena_door_rect(field_width: int, field_height: int) -> pygam
     return door
 
 
+def get_field_farm_rects(field_width: int, field_height: int) -> list[pygame.Rect]:
+    return [
+        pygame.Rect(int(field_width * 0.52), int(field_height * 0.72), 360, 240),
+        pygame.Rect(int(field_width * 0.72), int(field_height * 0.68), 380, 260),
+    ]
+
+
+def get_field_pond_rect(field_width: int, field_height: int) -> pygame.Rect:
+    return pygame.Rect(int(field_width * 0.62), int(field_height * 0.32), 420, 260)
+
+
+def get_field_ruins_rects(field_width: int, field_height: int) -> list[pygame.Rect]:
+    """Non-solid decorative landmarks for the field and map."""
+    base = pygame.Rect(0, 0, 420, 260)
+    base.center = (int(field_width * 0.44), int(field_height * 0.44))
+    inner = base.inflate(-120, -120)
+    pillar = pygame.Rect(0, 0, 44, 44)
+    pillar.center = (inner.left + 70, inner.top + 60)
+    pillar2 = pygame.Rect(0, 0, 44, 44)
+    pillar2.center = (inner.right - 70, inner.bottom - 60)
+    return [base, inner, pillar, pillar2]
+
+
+def get_field_shrine_rect(field_width: int, field_height: int) -> pygame.Rect:
+    rect = pygame.Rect(0, 0, 220, 180)
+    rect.center = (int(field_width * 0.18), int(field_height * 0.84))
+    return rect
+
+
 def build_field_environment_surface(field_width: int, field_height: int) -> pygame.Surface:
     """Build a Zelda-ish overworld environment surface (world space) for the field level."""
     surface = pygame.Surface((field_width, field_height))
@@ -213,18 +242,36 @@ def build_field_environment_surface(field_width: int, field_height: int) -> pyga
     pygame.draw.rect(surface, wall_edge, door.inflate(12, 8), 3)
 
     # Farm fields to the south-east
-    farms = [
-        pygame.Rect(int(field_width * 0.52), int(field_height * 0.72), 360, 240),
-        pygame.Rect(int(field_width * 0.72), int(field_height * 0.68), 380, 260),
-    ]
-    for r in farms:
+    for r in get_field_farm_rects(field_width, field_height):
         _draw_farm(surface, r)
 
     # Small pond to break up the grass
-    pond_rect = pygame.Rect(int(field_width * 0.62), int(field_height * 0.32), 420, 260)
+    pond_rect = get_field_pond_rect(field_width, field_height)
     pygame.draw.ellipse(surface, (40, 110, 170), pond_rect)
     pygame.draw.ellipse(surface, (170, 220, 255), pond_rect.inflate(-18, -18), 4)
     pygame.draw.ellipse(surface, (20, 70, 120), pond_rect, 4)
+
+    # Decorative ruins (non-solid landmark)
+    ruins = get_field_ruins_rects(field_width, field_height)
+    pygame.draw.rect(surface, (110, 110, 120), ruins[0], border_radius=14)
+    pygame.draw.rect(surface, (70, 70, 80), ruins[0], 6, border_radius=14)
+    pygame.draw.rect(surface, (90, 90, 100), ruins[1], border_radius=10)
+    pygame.draw.rect(surface, (55, 55, 65), ruins[1], 4, border_radius=10)
+    for pillar in ruins[2:]:
+        pygame.draw.rect(surface, (120, 120, 130), pillar, border_radius=10)
+        pygame.draw.rect(surface, (60, 60, 70), pillar, 3, border_radius=10)
+
+    # Tiny shrine (non-solid landmark)
+    shrine = get_field_shrine_rect(field_width, field_height)
+    pygame.draw.rect(surface, (170, 170, 190), shrine, border_radius=12)
+    pygame.draw.rect(surface, (90, 90, 110), shrine, 6, border_radius=12)
+    roof = [
+        (shrine.left - 14, shrine.top + 18),
+        (shrine.centerx, shrine.top - 90),
+        (shrine.right + 14, shrine.top + 18),
+    ]
+    pygame.draw.polygon(surface, (130, 90, 110), roof)
+    pygame.draw.polygon(surface, (70, 50, 70), roof, 5)
 
     # Decorative trees and shrubs (deterministic)
     rng = random.Random(1337)
