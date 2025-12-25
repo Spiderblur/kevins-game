@@ -85,8 +85,12 @@ ROOM_WORLD_HEIGHT = settings.SCREEN_HEIGHT * 3
 MAP_TO_PERSON_SCALE = 1.0
 # Quest location in field world coordinates (far enough to feel like a journey).
 QUEST_POS_WORLD = pygame.Vector2(ROOM3_FIELD_WIDTH * 0.85, ROOM3_FIELD_HEIGHT * 0.25)
-VILLAGE_SW_POS_WORLD = pygame.Vector2(80, ROOM3_FIELD_HEIGHT - 80)
-VILLAGE_SE_POS_WORLD = pygame.Vector2(ROOM3_FIELD_WIDTH - 80, ROOM3_FIELD_HEIGHT - 80)
+# Villages are near the edges (for exploration) but not pinned to the very border.
+VILLAGE_EDGE_PAD = 1200
+# Southwest village: keep it in the bottom-left area, but not stuck on the border.
+# Placing it between major landmarks (e.g. shrine and farms) feels more natural.
+VILLAGE_SW_POS_WORLD = pygame.Vector2(int(ROOM3_FIELD_WIDTH * 0.30), int(ROOM3_FIELD_HEIGHT * 0.78))
+VILLAGE_SE_POS_WORLD = pygame.Vector2(ROOM3_FIELD_WIDTH - VILLAGE_EDGE_PAD, ROOM3_FIELD_HEIGHT - int(VILLAGE_EDGE_PAD * 1.55))
 
 
 def current_world_size(state: GameState) -> tuple[int, int]:
@@ -931,6 +935,10 @@ def reset_round(state: GameState):
             {"id": "village", "name": "Village Waystone", "pos": pygame.Vector2(t_rect.centerx, t_rect.bottom + 220)},
             {"id": "boss", "name": "Boss Gate Waystone", "pos": pygame.Vector2(boss_door.centerx, boss_door.bottom + 220)},
         ]
+        # Make the shop/village waystone available right away.
+        if not hasattr(state, "discovered_waystones") or getattr(state, "discovered_waystones", None) is None:
+            state.discovered_waystones = set()
+        state.discovered_waystones.add("village")
     else:
         player.pos.update(settings.SCREEN_WIDTH / 2, settings.SCREEN_HEIGHT / 2)
     update_camera_follow(state)
@@ -1019,42 +1027,167 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
                 state.quests_open = False
         return
     if state.map_open:
+        screen = state.screen
+        full_rect = pygame.Rect(0, 0, screen.get_width(), screen.get_height())
+        map_w = int(full_rect.width * 0.985)
+        map_h = int(full_rect.height * 0.975)
+        map_rect = pygame.Rect(0, 0, map_w, map_h)
+        map_rect.center = full_rect.center
+
+        base_scale_x = map_rect.width / ROOM3_FIELD_WIDTH
+        base_scale_y = map_rect.height / ROOM3_FIELD_HEIGHT
+
+        def clamp_map_center(center_world: pygame.Vector2, zoom_level: float) -> pygame.Vector2:
+            scale_x = base_scale_x * zoom_level
+            scale_y = base_scale_y * zoom_level
+            half_view_w = (map_rect.width / 2) / max(0.0001, scale_x)
+            half_view_h = (map_rect.height / 2) / max(0.0001, scale_y)
+            cx_min = ROOM3_FIELD_WIDTH / 2 if half_view_w >= ROOM3_FIELD_WIDTH / 2 else half_view_w
+            cx_max = ROOM3_FIELD_WIDTH / 2 if half_view_w >= ROOM3_FIELD_WIDTH / 2 else ROOM3_FIELD_WIDTH - half_view_w
+            cy_min = ROOM3_FIELD_HEIGHT / 2 if half_view_h >= ROOM3_FIELD_HEIGHT / 2 else half_view_h
+            cy_max = ROOM3_FIELD_HEIGHT / 2 if half_view_h >= ROOM3_FIELD_HEIGHT / 2 else ROOM3_FIELD_HEIGHT - half_view_h
+            return pygame.Vector2(
+                max(cx_min, min(center_world.x, cx_max)),
+                max(cy_min, min(center_world.y, cy_max)),
+            )
+
+        def handle_map_click(click_pos: tuple[int, int]):
+            # Allow advancing dialogue while the map overlay is up
+            if state.dialogue_lines:
+                handle_dialogue_click(state)
+                return
+
+            if not state.has_map:
+                return
+
+            map_zoom = float(getattr(state, "map_zoom", 1.0))
+            map_zoom = max(getattr(settings, "MAP_ZOOM_MIN", 1.0), min(map_zoom, getattr(settings, "MAP_ZOOM_MAX", 6.0)))
+            scale_x = base_scale_x * map_zoom
+            scale_y = base_scale_y * map_zoom
+            center = pygame.Vector2(getattr(state, "map_center_world", pygame.Vector2(ROOM3_FIELD_WIDTH / 2, ROOM3_FIELD_HEIGHT / 2)))
+            center = clamp_map_center(center, map_zoom)
+            state.map_zoom = map_zoom
+            state.map_center_world = center
+
+            def world_to_map(pos_world: pygame.Vector2) -> pygame.Vector2:
+                return pygame.Vector2(
+                    map_rect.centerx + (pos_world.x - center.x) * scale_x,
+                    map_rect.centery + (pos_world.y - center.y) * scale_y,
+                )
+
+            for ws in getattr(state, "waystones", []):
+                ws_id = ws.get("id", "")
+                if ws_id and ws_id not in getattr(state, "discovered_waystones", set()):
+                    continue
+                pos = pygame.Vector2(ws.get("pos", (0, 0)))
+                mp = world_to_map(pos)
+                if not map_rect.collidepoint(int(mp.x), int(mp.y)):
+                    continue
+                if (pygame.Vector2(click_pos) - mp).length_squared() <= (18 * 18):
+                    state.fast_travel_active = True
+                    state.fast_travel_timer = 0.0
+                    state.fast_travel_duration = 1.2
+                    state.fast_travel_from = pygame.Vector2(player.pos)
+                    state.fast_travel_to = pygame.Vector2(pos)
+                    state.fast_travel_swapped = False
+                    state.map_open = False
+                    state.map_dragging = False
+                    return
+
         for event in events:
             if event.type == pygame.QUIT:
                 state.running = False
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and state.dialogue_lines:
-                # Allow advancing dialogue while the map overlay is up
-                handle_dialogue_click(state)
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and state.has_map:
-                # Click on discovered waystones to fast travel.
-                full_rect = pygame.Rect(0, 0, state.screen.get_width(), state.screen.get_height())
-                map_w = int(full_rect.width * 0.985)
-                map_h = int(full_rect.height * 0.975)
-                map_rect = pygame.Rect(0, 0, map_w, map_h)
-                map_rect.center = full_rect.center
-                scale_x = map_rect.width / ROOM3_FIELD_WIDTH
-                scale_y = map_rect.height / ROOM3_FIELD_HEIGHT
-
-                def world_to_map(pos_world: pygame.Vector2) -> pygame.Vector2:
-                    return pygame.Vector2(map_rect.left + pos_world.x * scale_x, map_rect.top + pos_world.y * scale_y)
-
-                for ws in getattr(state, "waystones", []):
-                    ws_id = ws.get("id", "")
-                    if ws_id and ws_id not in getattr(state, "discovered_waystones", set()):
+            if event.type == pygame.MOUSEWHEEL:
+                old_zoom = float(getattr(state, "map_zoom", 1.0))
+                step = float(getattr(settings, "MAP_ZOOM_STEP", 0.2))
+                new_zoom = old_zoom + (event.y * step)
+                new_zoom = max(getattr(settings, "MAP_ZOOM_MIN", 1.0), min(new_zoom, getattr(settings, "MAP_ZOOM_MAX", 6.0)))
+                if new_zoom != old_zoom:
+                    mouse_pos = pygame.mouse.get_pos()
+                    center = pygame.Vector2(getattr(state, "map_center_world", pygame.Vector2(ROOM3_FIELD_WIDTH / 2, ROOM3_FIELD_HEIGHT / 2)))
+                    old_scale_x = base_scale_x * old_zoom
+                    old_scale_y = base_scale_y * old_zoom
+                    focus_world = center + pygame.Vector2(
+                        (mouse_pos[0] - map_rect.centerx) / max(0.0001, old_scale_x),
+                        (mouse_pos[1] - map_rect.centery) / max(0.0001, old_scale_y),
+                    )
+                    new_scale_x = base_scale_x * new_zoom
+                    new_scale_y = base_scale_y * new_zoom
+                    new_center = focus_world - pygame.Vector2(
+                        (mouse_pos[0] - map_rect.centerx) / max(0.0001, new_scale_x),
+                        (mouse_pos[1] - map_rect.centery) / max(0.0001, new_scale_y),
+                    )
+                    state.map_zoom = new_zoom
+                    state.map_center_world = clamp_map_center(new_center, new_zoom)
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button in (4, 5):
+                # Older pygame: mouse wheel up/down reported as buttons 4/5.
+                wheel_dir = 1 if event.button == 4 else -1
+                old_zoom = float(getattr(state, "map_zoom", 1.0))
+                step = float(getattr(settings, "MAP_ZOOM_STEP", 0.2))
+                new_zoom = old_zoom + (wheel_dir * step)
+                new_zoom = max(getattr(settings, "MAP_ZOOM_MIN", 1.0), min(new_zoom, getattr(settings, "MAP_ZOOM_MAX", 6.0)))
+                if new_zoom != old_zoom:
+                    mouse_pos = getattr(event, "pos", pygame.mouse.get_pos())
+                    center = pygame.Vector2(getattr(state, "map_center_world", pygame.Vector2(ROOM3_FIELD_WIDTH / 2, ROOM3_FIELD_HEIGHT / 2)))
+                    old_scale_x = base_scale_x * old_zoom
+                    old_scale_y = base_scale_y * old_zoom
+                    focus_world = center + pygame.Vector2(
+                        (mouse_pos[0] - map_rect.centerx) / max(0.0001, old_scale_x),
+                        (mouse_pos[1] - map_rect.centery) / max(0.0001, old_scale_y),
+                    )
+                    new_scale_x = base_scale_x * new_zoom
+                    new_scale_y = base_scale_y * new_zoom
+                    new_center = focus_world - pygame.Vector2(
+                        (mouse_pos[0] - map_rect.centerx) / max(0.0001, new_scale_x),
+                        (mouse_pos[1] - map_rect.centery) / max(0.0001, new_scale_y),
+                    )
+                    state.map_zoom = new_zoom
+                    state.map_center_world = clamp_map_center(new_center, new_zoom)
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                map_zoom = float(getattr(state, "map_zoom", 1.0))
+                if map_zoom > 1.001 and map_rect.collidepoint(getattr(event, "pos", pygame.mouse.get_pos())):
+                    state.map_dragging = True
+                    pos = pygame.Vector2(getattr(event, "pos", pygame.mouse.get_pos()))
+                    state.map_drag_start = pos
+                    state.map_drag_last = pos
+                    state.map_drag_moved = False
+            if event.type == pygame.MOUSEMOTION and getattr(state, "map_dragging", False):
+                zoom_level = float(getattr(state, "map_zoom", 1.0))
+                if zoom_level <= 1.001:
+                    continue
+                pos = pygame.Vector2(getattr(event, "pos", pygame.mouse.get_pos()))
+                # Only begin panning once the mouse has moved a bit (so clicks still work).
+                if not getattr(state, "map_drag_moved", False):
+                    total = pos - pygame.Vector2(getattr(state, "map_drag_start", pos))
+                    if total.length_squared() < (6 * 6):
                         continue
-                    pos = pygame.Vector2(ws.get("pos", (0, 0)))
-                    mp = world_to_map(pos)
-                    if (pygame.Vector2(event.pos) - mp).length_squared() <= (18 * 18):
-                        state.fast_travel_active = True
-                        state.fast_travel_timer = 0.0
-                        state.fast_travel_duration = 1.2
-                        state.fast_travel_from = pygame.Vector2(player.pos)
-                        state.fast_travel_to = pygame.Vector2(pos)
-                        state.fast_travel_swapped = False
-                        state.map_open = False
-                        return
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_m:
+                    state.map_drag_moved = True
+                    state.map_drag_last = pygame.Vector2(getattr(state, "map_drag_start", pos))
+
+                scale_x = base_scale_x * zoom_level
+                scale_y = base_scale_y * zoom_level
+                last = pygame.Vector2(getattr(state, "map_drag_last", pos))
+                delta = pos - last
+                state.map_drag_last = pos
+                center = pygame.Vector2(getattr(state, "map_center_world", pygame.Vector2(ROOM3_FIELD_WIDTH / 2, ROOM3_FIELD_HEIGHT / 2)))
+                new_center = center - pygame.Vector2(
+                    delta.x / max(0.0001, scale_x),
+                    delta.y / max(0.0001, scale_y),
+                )
+                state.map_center_world = clamp_map_center(new_center, zoom_level)
+            if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                released_pos = getattr(event, "pos", pygame.mouse.get_pos())
+                was_dragging = bool(getattr(state, "map_dragging", False))
+                moved = bool(getattr(state, "map_drag_moved", False))
+                state.map_dragging = False
+                state.map_drag_moved = False
+                if was_dragging and moved:
+                    continue
+                handle_map_click(released_pos)
+            if event.type == pygame.KEYDOWN and event.key in (pygame.K_m, pygame.K_ESCAPE):
                 state.map_open = False
+                state.map_dragging = False
+                state.map_drag_moved = False
                 restore_dialogue(state)
         return
     for event in events:
@@ -1989,20 +2122,47 @@ def draw_game(state: GameState):
         map_rect = pygame.Rect(0, 0, map_w, map_h)
         map_rect.center = full_rect.center
         pygame.draw.rect(screen, (40, 52, 70), map_rect, border_radius=12)
-        env_map = get_field_map_surface((map_rect.width, map_rect.height), ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
-        screen.blit(env_map, map_rect.topleft)
-        pygame.draw.rect(screen, (120, 150, 190), map_rect, 3, border_radius=12)
 
-        scale_x = map_rect.width / ROOM3_FIELD_WIDTH
-        scale_y = map_rect.height / ROOM3_FIELD_HEIGHT
+        map_zoom = float(getattr(state, "map_zoom", 1.0))
+        map_zoom = max(getattr(settings, "MAP_ZOOM_MIN", 1.0), min(map_zoom, getattr(settings, "MAP_ZOOM_MAX", 6.0)))
+        base_scale_x = map_rect.width / ROOM3_FIELD_WIDTH
+        base_scale_y = map_rect.height / ROOM3_FIELD_HEIGHT
+
+        def clamp_map_center(center_world: pygame.Vector2, zoom_level: float) -> pygame.Vector2:
+            scale_x = base_scale_x * zoom_level
+            scale_y = base_scale_y * zoom_level
+            half_view_w = (map_rect.width / 2) / max(0.0001, scale_x)
+            half_view_h = (map_rect.height / 2) / max(0.0001, scale_y)
+            cx_min = ROOM3_FIELD_WIDTH / 2 if half_view_w >= ROOM3_FIELD_WIDTH / 2 else half_view_w
+            cx_max = ROOM3_FIELD_WIDTH / 2 if half_view_w >= ROOM3_FIELD_WIDTH / 2 else ROOM3_FIELD_WIDTH - half_view_w
+            cy_min = ROOM3_FIELD_HEIGHT / 2 if half_view_h >= ROOM3_FIELD_HEIGHT / 2 else half_view_h
+            cy_max = ROOM3_FIELD_HEIGHT / 2 if half_view_h >= ROOM3_FIELD_HEIGHT / 2 else ROOM3_FIELD_HEIGHT - half_view_h
+            return pygame.Vector2(
+                max(cx_min, min(center_world.x, cx_max)),
+                max(cy_min, min(center_world.y, cy_max)),
+            )
+
+        center_world = pygame.Vector2(
+            getattr(state, "map_center_world", pygame.Vector2(ROOM3_FIELD_WIDTH / 2, ROOM3_FIELD_HEIGHT / 2))
+        )
+        center_world = clamp_map_center(center_world, map_zoom)
+        state.map_zoom = map_zoom
+        state.map_center_world = center_world
+
+        scale_x = base_scale_x * map_zoom
+        scale_y = base_scale_y * map_zoom
 
         def world_to_map(pos_world: pygame.Vector2) -> pygame.Vector2:
-            return pygame.Vector2(map_rect.left + pos_world.x * scale_x, map_rect.top + pos_world.y * scale_y)
+            return pygame.Vector2(
+                map_rect.centerx + (pos_world.x - center_world.x) * scale_x,
+                map_rect.centery + (pos_world.y - center_world.y) * scale_y,
+            )
 
         def clamp_map(pos: pygame.Vector2, pad: int = 16) -> pygame.Vector2:
+            inner = map_rect.inflate(-pad * 2, -pad * 2)
             return pygame.Vector2(
-                max(map_rect.left + pad, min(pos.x, map_rect.right - pad)),
-                max(map_rect.top + pad, min(pos.y, map_rect.bottom - pad)),
+                max(inner.left, min(pos.x, inner.right)),
+                max(inner.top, min(pos.y, inner.bottom)),
             )
 
         def world_rect_to_map(rect_world: pygame.Rect) -> pygame.Rect:
@@ -2011,11 +2171,50 @@ def draw_game(state: GameState):
             h = max(1, int(rect_world.height * scale_y))
             return pygame.Rect(int(tl.x), int(tl.y), w, h)
 
-        for i in range(1, 10):
-            gx = int(map_rect.left + map_rect.width * (i / 10))
-            gy = int(map_rect.top + map_rect.height * (i / 10))
-            pygame.draw.line(screen, (70, 90, 110), (gx, map_rect.top + 6), (gx, map_rect.bottom - 6), 1)
-            pygame.draw.line(screen, (70, 90, 110), (map_rect.left + 6, gy), (map_rect.right - 6, gy), 1)
+        placed_markers: list[tuple[pygame.Vector2, float]] = []
+
+        def place_marker(pos: pygame.Vector2, radius: float) -> pygame.Vector2 | None:
+            if not map_rect.collidepoint(int(pos.x), int(pos.y)):
+                return None
+
+            for _ in range(24):
+                ok = True
+                for other_pos, other_r in placed_markers:
+                    if (pos - other_pos).length_squared() < (radius + other_r + 3) ** 2:
+                        ok = False
+                        break
+                if ok:
+                    placed_markers.append((pygame.Vector2(pos), float(radius)))
+                    return pos
+
+                # Nudge in a small spiral to avoid overlaps (screen-space pixels).
+                idx = len(placed_markers) + 1
+                ang = idx * 1.7
+                step = 6 + (idx % 4) * 3
+                pos = pos + pygame.Vector2(math.cos(ang), math.sin(ang)) * step
+                if not map_rect.collidepoint(int(pos.x), int(pos.y)):
+                    return None
+
+            return None
+
+        # Map background + details clipped to the map area (so zoom/pan doesn't paint outside).
+        prev_clip = screen.get_clip()
+        screen.set_clip(map_rect)
+        env_base = get_field_map_surface((map_rect.width, map_rect.height), ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT)
+        if abs(map_zoom - 1.0) < 0.001:
+            env_map = env_base
+        else:
+            env_map = pygame.transform.smoothscale(
+                env_base,
+                (max(1, int(map_rect.width * map_zoom)), max(1, int(map_rect.height * map_zoom))),
+            )
+        origin = pygame.Vector2(
+            map_rect.centerx - center_world.x * scale_x,
+            map_rect.centery - center_world.y * scale_y,
+        )
+        screen.blit(env_map, (int(origin.x), int(origin.y)))
+
+        # No grid lines: keep the map looking natural.
 
         arena_rect = world_rect_to_map(get_field_boss_arena_rect(ROOM3_FIELD_WIDTH, ROOM3_FIELD_HEIGHT))
         pygame.draw.rect(screen, (255, 120, 120), arena_rect, 3, border_radius=10)
@@ -2032,41 +2231,57 @@ def draw_game(state: GameState):
 
         table = get_room3_table_rect(state.screen, pygame.Vector2(0, 0))
         pygame.draw.rect(screen, (255, 220, 80), world_rect_to_map(table), 3, border_radius=8)
+        # Reserve marker space near the shop so quest/waystone dots don't overlap it.
+        _shop_anchor = place_marker(world_to_map(pygame.Vector2(table.centerx, table.centery)), radius=12)
 
         # Waystones on map (clickable if discovered).
         for ws in getattr(state, "waystones", []):
             pos_world = pygame.Vector2(ws.get("pos", (0, 0)))
             ws_id = ws.get("id", "")
             discovered = (not ws_id) or (ws_id in getattr(state, "discovered_waystones", set()))
-            mp = clamp_map(world_to_map(pos_world), pad=16)
+            mp_raw = world_to_map(pos_world)
+            if abs(map_zoom - 1.0) < 0.001:
+                mp = clamp_map(mp_raw, pad=16)
+            else:
+                if not map_rect.collidepoint(int(mp_raw.x), int(mp_raw.y)):
+                    continue
+                mp = mp_raw
             col = (80, 170, 255) if discovered else (80, 90, 110)
-            pygame.draw.circle(screen, col, (int(mp.x), int(mp.y)), 8)
-            pygame.draw.circle(screen, (20, 30, 50), (int(mp.x), int(mp.y)), 8, 2)
+            placed = place_marker(pygame.Vector2(mp), radius=9)
+            if placed is None:
+                continue
+            pygame.draw.circle(screen, col, (int(placed.x), int(placed.y)), 8)
+            pygame.draw.circle(screen, (20, 30, 50), (int(placed.x), int(placed.y)), 8, 2)
 
-        # Player arrow icon
+        # Player arrow icon (only draw when in view; no edge-clamping "dot").
         arrow_color = (255, 220, 80)
         px = max(0, min(player.pos.x, ROOM3_FIELD_WIDTH))
         py = max(0, min(player.pos.y, ROOM3_FIELD_HEIGHT))
-        arrow_pos = clamp_map(world_to_map(pygame.Vector2(px, py)), pad=16)
-        pygame.draw.polygon(
-            screen,
-            arrow_color,
-            [
-                (int(arrow_pos.x), int(arrow_pos.y - 14)),
-                (int(arrow_pos.x - 10), int(arrow_pos.y + 10)),
-                (int(arrow_pos.x + 10), int(arrow_pos.y + 10)),
-            ],
-        )
-        pygame.draw.polygon(
-            screen,
-            (40, 30, 10),
-            [
-                (int(arrow_pos.x), int(arrow_pos.y - 14)),
-                (int(arrow_pos.x - 10), int(arrow_pos.y + 10)),
-                (int(arrow_pos.x + 10), int(arrow_pos.y + 10)),
-            ],
-            2,
-        )
+        arrow_pos = world_to_map(pygame.Vector2(px, py))
+        if not map_rect.collidepoint(int(arrow_pos.x), int(arrow_pos.y)):
+            arrow_pos = None
+        tip = 10
+        half = 7
+        if arrow_pos is not None:
+            pygame.draw.polygon(
+                screen,
+                arrow_color,
+                [
+                    (int(arrow_pos.x), int(arrow_pos.y - tip)),
+                    (int(arrow_pos.x - half), int(arrow_pos.y + half)),
+                    (int(arrow_pos.x + half), int(arrow_pos.y + half)),
+                ],
+            )
+            pygame.draw.polygon(
+                screen,
+                (40, 30, 10),
+                [
+                    (int(arrow_pos.x), int(arrow_pos.y - tip)),
+                    (int(arrow_pos.x - half), int(arrow_pos.y + half)),
+                    (int(arrow_pos.x + half), int(arrow_pos.y + half)),
+                ],
+                2,
+            )
 
         markers = state.quest_markers
         if markers:
@@ -2075,37 +2290,29 @@ def draw_game(state: GameState):
             for pos_world in markers[:6]:
                 qx = max(0, min(pos_world.x, ROOM3_FIELD_WIDTH))
                 qy = max(0, min(pos_world.y, ROOM3_FIELD_HEIGHT))
-                quest_pos = clamp_map(world_to_map(pygame.Vector2(qx, qy)), pad=16)
-                pygame.draw.circle(screen, quest_fill, (int(quest_pos.x), int(quest_pos.y)), 8)
-                pygame.draw.circle(screen, quest_outline, (int(quest_pos.x), int(quest_pos.y)), 8, 2)
+                quest_pos = world_to_map(pygame.Vector2(qx, qy))
+                placed = place_marker(pygame.Vector2(quest_pos), radius=10)
+                if placed is None:
+                    continue
+                pygame.draw.circle(screen, quest_fill, (int(placed.x), int(placed.y)), 8)
+                pygame.draw.circle(screen, quest_outline, (int(placed.x), int(placed.y)), 8, 2)
         elif state.treasure_hint_visible:
             qx = max(0, min(QUEST_POS_WORLD.x, ROOM3_FIELD_WIDTH))
             qy = max(0, min(QUEST_POS_WORLD.y, ROOM3_FIELD_HEIGHT))
-            quest_pos = clamp_map(world_to_map(pygame.Vector2(qx, qy)), pad=16)
+            quest_pos = world_to_map(pygame.Vector2(qx, qy))
             quest_fill = (255, 220, 80)
             quest_outline = (255, 255, 120)
-            pygame.draw.circle(screen, quest_fill, (int(quest_pos.x), int(quest_pos.y)), 8)
-            pygame.draw.circle(screen, quest_outline, (int(quest_pos.x), int(quest_pos.y)), 8, 2)
+            placed = place_marker(pygame.Vector2(quest_pos), radius=10)
+            if placed is not None:
+                pygame.draw.circle(screen, quest_fill, (int(placed.x), int(placed.y)), 8)
+                pygame.draw.circle(screen, quest_outline, (int(placed.x), int(placed.y)), 8, 2)
 
-        title = state.font.render("Map", True, (230, 240, 255))
-        screen.blit(title, (map_rect.left + 12, map_rect.top + 12))
-        legend_y = map_rect.top + 44
-        legend_items = [
-            ("Arena", (255, 120, 120)),
-            ("Pond", (110, 190, 255)),
-            ("Farms", (120, 240, 150)),
-            ("Shop", (255, 220, 80)),
-            ("Waystone", (80, 170, 255)),
-            ("Shrine", (210, 190, 255)),
-        ]
-        if state.quest_markers or state.treasure_hint_visible:
-            legend_items.insert(0, ("Quest", (255, 220, 80)))
-        for label, col in legend_items[:7]:
-            pygame.draw.rect(screen, col, pygame.Rect(map_rect.left + 12, legend_y + 6, 14, 14), border_radius=3)
-            text = state.font.render(label, True, (180, 200, 220))
-            screen.blit(text, (map_rect.left + 32, legend_y))
-            legend_y += 28
-        hint = state.font.render("Press M to close", True, (180, 200, 220))
+        screen.set_clip(prev_clip)
+        pygame.draw.rect(screen, (120, 150, 190), map_rect, 3, border_radius=12)
+
+        ztxt = state.font.render(f"{map_zoom:.1f}x", True, (180, 200, 220))
+        screen.blit(ztxt, (map_rect.right - ztxt.get_width() - 16, map_rect.top + 16))
+        hint = state.font.render("Wheel: zoom   Left-drag: pan   M: close", True, (180, 200, 220))
         screen.blit(hint, (map_rect.left + 12, map_rect.bottom - 32))
         return
 
@@ -2234,20 +2441,24 @@ def draw_game(state: GameState):
             leg_swing = int(18 * math.sin(time_tick * 0.011))
         # small idle bob for breathing / animation
         bob = math.sin(time_tick * 0.004) * 2
-        pygame.draw.line(
-            screen,
-            (60, 0, 0),
-            (int(p.x - 14), int(hip_y)),
-            (int(p.x - 16 + leg_swing), int(hip_y + leg_len)),
-            8,
-        )
-        pygame.draw.line(
-            screen,
-            (60, 0, 0),
-            (int(p.x + 14), int(hip_y)),
-            (int(p.x + 16 - leg_swing), int(hip_y + leg_len)),
-            8,
-        )
+        leg_thickness = 12
+        left_hip = (int(p.x - 18), int(hip_y))
+        left_foot = (int(p.x - 20 + leg_swing), int(hip_y + leg_len))
+        right_hip = (int(p.x + 18), int(hip_y))
+        right_foot = (int(p.x + 20 - leg_swing), int(hip_y + leg_len))
+        pygame.draw.line(screen, (60, 0, 0), left_hip, left_foot, leg_thickness)
+        pygame.draw.line(screen, (60, 0, 0), right_hip, right_foot, leg_thickness)
+
+        # Small boots at the feet (wide, short) for more character.
+        boot_w, boot_h = 18, 8
+        boot_col = (35, 25, 20)
+        boot_outline = (10, 10, 10)
+        boot_highlight = (80, 60, 45)
+        for fx, fy in (left_foot, right_foot):
+            boot = pygame.Rect(int(fx - boot_w / 2), int(fy - boot_h / 2), boot_w, boot_h)
+            pygame.draw.rect(screen, boot_col, boot, border_radius=3)
+            pygame.draw.rect(screen, boot_outline, boot, 2, border_radius=3)
+            pygame.draw.line(screen, boot_highlight, (boot.left + 2, boot.top + 2), (boot.right - 2, boot.top + 2), 2)
         attack_dir = (
             get_swing_dir(player.swing_base_dir, player.swing_timer, settings.PLAYER_SWING_TIME, player.facing)
             if player.swing_timer > 0
@@ -2490,9 +2701,24 @@ def draw_game(state: GameState):
         if player_layer is not None:
             dur = max(0.001, settings.DODGE_DURATION)
             phase = 1.0 - max(0.0, min(1.0, player.dodge_timer / dur))
-            angle = phase * 360.0
-            if player.dodge_dir.x < 0:
-                angle = -angle
+            roll_dir = pygame.Vector2(getattr(player, "dodge_dir", pygame.Vector2(0, 0)))
+            if roll_dir.length_squared() == 0:
+                roll_dir = pygame.Vector2(getattr(player, "facing", pygame.Vector2(0, -1)))
+            if roll_dir.length_squared() == 0:
+                roll_dir = pygame.Vector2(0, -1)
+            roll_dir = roll_dir.normalize()
+
+            # Rotate the sprite so the head leads the roll direction (head-first).
+            face_deg = math.degrees(math.atan2(roll_dir.x, -roll_dir.y))  # 0=up, 90=right, 180=down, -90=left
+
+            # Spin direction: pick a consistent "forward tumble" feel.
+            if abs(roll_dir.x) >= abs(roll_dir.y):
+                spin_sign = 1.0 if roll_dir.x < 0 else -1.0
+            else:
+                spin_sign = -1.0 if roll_dir.y > 0 else 1.0
+
+            tumble_deg = phase * 360.0 * spin_sign
+            angle = (-face_deg) + tumble_deg
             rotated = pygame.transform.rotozoom(player_layer, angle, 1.0)
             rect = rotated.get_rect(center=(int(p_screen.x), int(p_screen.y)))
             screen_out.blit(rotated, rect)

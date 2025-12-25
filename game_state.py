@@ -79,6 +79,15 @@ class GameState:
     villages_revealed: bool = False
     quests_open: bool = False
     camera_zoom: float = 1.0
+    # Map overlay camera
+    map_zoom: float = 1.0
+    map_center_world: pygame.Vector2 = field(
+        default_factory=lambda: pygame.Vector2(settings.FIELD_WORLD_WIDTH / 2, settings.FIELD_WORLD_HEIGHT / 2)
+    )
+    map_dragging: bool = False
+    map_drag_start: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
+    map_drag_moved: bool = False
+    map_drag_last: pygame.Vector2 = field(default_factory=lambda: pygame.Vector2(0, 0))
     # Waystones / fast travel
     waystones: list[dict] = field(default_factory=list)
     discovered_waystones: set[str] = field(default_factory=set)
