@@ -83,14 +83,15 @@ LEATHER_ARMOR_UNLOCKED = True
 ROOM_WORLD_WIDTH = settings.SCREEN_WIDTH * 3
 ROOM_WORLD_HEIGHT = settings.SCREEN_HEIGHT * 3
 MAP_TO_PERSON_SCALE = 1.0
-# Quest location in field world coordinates (far enough to feel like a journey).
-QUEST_POS_WORLD = pygame.Vector2(ROOM3_FIELD_WIDTH * 0.85, ROOM3_FIELD_HEIGHT * 0.25)
+# Quest location in field world coordinates: east of the shopkeeper village and west of the icy biome.
+QUEST_POS_WORLD = pygame.Vector2(int(ROOM3_FIELD_WIDTH * 0.43), int(ROOM3_FIELD_HEIGHT * 0.18))
 # Villages are near the edges (for exploration) but not pinned to the very border.
 VILLAGE_EDGE_PAD = 1200
-# Southwest village: keep it in the bottom-left area, but not stuck on the border.
-# Placing it between major landmarks (e.g. shrine and farms) feels more natural.
-VILLAGE_SW_POS_WORLD = pygame.Vector2(int(ROOM3_FIELD_WIDTH * 0.30), int(ROOM3_FIELD_HEIGHT * 0.78))
-VILLAGE_SE_POS_WORLD = pygame.Vector2(ROOM3_FIELD_WIDTH - VILLAGE_EDGE_PAD, ROOM3_FIELD_HEIGHT - int(VILLAGE_EDGE_PAD * 1.55))
+# Place the post-boss "village" quest markers into the map biomes:
+# - bottom-left: volcano biome
+# - top-right: snowy/icy biome
+VILLAGE_SW_POS_WORLD = pygame.Vector2(int(ROOM3_FIELD_WIDTH * 0.16), int(ROOM3_FIELD_HEIGHT * 0.84))
+VILLAGE_SE_POS_WORLD = pygame.Vector2(int(ROOM3_FIELD_WIDTH * 0.86), int(ROOM3_FIELD_HEIGHT * 0.14))
 
 
 def current_world_size(state: GameState) -> tuple[int, int]:
@@ -1193,17 +1194,10 @@ def handle_events(state: GameState, events: list[pygame.event.Event]):
     for event in events:
         if event.type == pygame.QUIT:
             state.running = False
-        if event.type == pygame.MOUSEWHEEL and not getattr(state, "inventory_open", False):
-            old = float(getattr(state, "camera_zoom", 1.0))
-            step = float(getattr(settings, "CAMERA_ZOOM_STEP", 0.1))
-            new_zoom = old + (event.y * step)
-            new_zoom = max(getattr(settings, "CAMERA_ZOOM_MIN", 0.6), min(new_zoom, getattr(settings, "CAMERA_ZOOM_MAX", 1.6)))
-            if new_zoom != old:
-                screen_w, screen_h = state.screen.get_width(), state.screen.get_height()
-                center_world = state.camera_offset + pygame.Vector2(screen_w / (2 * old), screen_h / (2 * old))
-                state.camera_zoom = new_zoom
-                state.camera_offset = center_world - pygame.Vector2(screen_w / (2 * new_zoom), screen_h / (2 * new_zoom))
-                update_camera_follow(state)
+        if event.type == pygame.MOUSEWHEEL:
+            # Scroll wheel only affects the map overlay (handled above when state.map_open is True).
+            # In normal gameplay, ignore it so the view doesn't zoom/scroll unexpectedly.
+            continue
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if state.dialogue_lines:
                 handle_dialogue_click(state)
@@ -1501,8 +1495,21 @@ def update_game(state: GameState):
             state.fast_travel_timer = 0.0
         return
 
+    # When the map overlay isn't open, keep its center tracking the player so it doesn't
+    # stay "scrolled away" from where you currently are.
+    if (not state.map_open) and state.level_index == FIELD_LEVEL and getattr(state, "has_map", False):
+        state.map_center_world = pygame.Vector2(player.pos)
+
     if state.map_open or getattr(state, "inventory_open", False) or getattr(state, "quests_open", False):
         return
+
+    def _clamp01(v: float) -> float:
+        return max(0.0, min(1.0, v))
+
+    def _ease_in_out_cos(t: float) -> float:
+        t = _clamp01(t)
+        return 0.5 - 0.5 * math.cos(math.pi * t)
+
     if player.health > 0:
         move = pygame.Vector2(0, 0)
         if keys[pygame.K_w]:
@@ -1515,8 +1522,18 @@ def update_game(state: GameState):
             move.x += 1
         move_input = pygame.Vector2(move)
         if player.is_dodging:
-            player.pos += player.dodge_dir * player.speed * settings.DODGE_SPEED_MULT * state.dt
-            player.dodge_timer -= state.dt
+            dur = max(0.001, float(settings.DODGE_DURATION))
+            timer_now = float(player.dodge_timer)
+            timer_next = max(0.0, timer_now - state.dt)
+
+            t_now = 1.0 - _clamp01(timer_now / dur)
+            t_next = 1.0 - _clamp01(timer_next / dur)
+            p_now = _ease_in_out_cos(t_now)
+            p_next = _ease_in_out_cos(t_next)
+            step_dist = player.speed * settings.DODGE_SPEED_MULT * dur * (p_next - p_now)
+            player.pos += player.dodge_dir * step_dist
+
+            player.dodge_timer = timer_next
             if player.dodge_timer <= 0:
                 player.is_dodging = False
         else:
@@ -2231,27 +2248,20 @@ def draw_game(state: GameState):
 
         table = get_room3_table_rect(state.screen, pygame.Vector2(0, 0))
         pygame.draw.rect(screen, (255, 220, 80), world_rect_to_map(table), 3, border_radius=8)
-        # Reserve marker space near the shop so quest/waystone dots don't overlap it.
-        _shop_anchor = place_marker(world_to_map(pygame.Vector2(table.centerx, table.centery)), radius=12)
 
         # Waystones on map (clickable if discovered).
         for ws in getattr(state, "waystones", []):
             pos_world = pygame.Vector2(ws.get("pos", (0, 0)))
             ws_id = ws.get("id", "")
             discovered = (not ws_id) or (ws_id in getattr(state, "discovered_waystones", set()))
-            mp_raw = world_to_map(pos_world)
-            if abs(map_zoom - 1.0) < 0.001:
-                mp = clamp_map(mp_raw, pad=16)
-            else:
-                if not map_rect.collidepoint(int(mp_raw.x), int(mp_raw.y)):
-                    continue
-                mp = mp_raw
-            col = (80, 170, 255) if discovered else (80, 90, 110)
-            placed = place_marker(pygame.Vector2(mp), radius=9)
-            if placed is None:
+            if not discovered:
                 continue
-            pygame.draw.circle(screen, col, (int(placed.x), int(placed.y)), 8)
-            pygame.draw.circle(screen, (20, 30, 50), (int(placed.x), int(placed.y)), 8, 2)
+            mp_raw = world_to_map(pos_world)
+            if not map_rect.collidepoint(int(mp_raw.x), int(mp_raw.y)):
+                continue
+            col = (80, 170, 255)
+            pygame.draw.circle(screen, col, (int(mp_raw.x), int(mp_raw.y)), 8)
+            pygame.draw.circle(screen, (20, 30, 50), (int(mp_raw.x), int(mp_raw.y)), 8, 2)
 
         # Player arrow icon (only draw when in view; no edge-clamping "dot").
         arrow_color = (255, 220, 80)
@@ -2363,8 +2373,9 @@ def draw_game(state: GameState):
         npc_rect = npc_rect_world.move(int(-cam.x), int(-cam.y))
         pygame.draw.rect(screen, (90, 60, 20), npc_rect)
         pygame.draw.rect(screen, (70, 40, 10), npc_rect, 2)
-        head_center = (npc_rect.centerx, npc_rect.top + 12)
-        pygame.draw.circle(screen, (240, 210, 180), head_center, 10)
+        head_r = max(10, int(min(npc_rect.width, npc_rect.height) * 0.18))
+        head_center = (npc_rect.centerx, npc_rect.top + head_r + 2)
+        pygame.draw.circle(screen, (240, 210, 180), head_center, head_r)
         prompt = state.font.render('Click on me to talk', True, (255, 255, 200))
         screen.blit(prompt, (npc_rect.centerx - prompt.get_width() // 2, npc_rect.top - 26))
 
@@ -2449,16 +2460,97 @@ def draw_game(state: GameState):
         pygame.draw.line(screen, (60, 0, 0), left_hip, left_foot, leg_thickness)
         pygame.draw.line(screen, (60, 0, 0), right_hip, right_foot, leg_thickness)
 
+        move_dir = pygame.Vector2(0, 0)
+        if keys[pygame.K_w]:
+            move_dir.y -= 1
+        if keys[pygame.K_s]:
+            move_dir.y += 1
+        if keys[pygame.K_a]:
+            move_dir.x -= 1
+        if keys[pygame.K_d]:
+            move_dir.x += 1
+
+        walking_vertical = (
+            keys_down
+            and move_dir.length_squared() > 0
+            and move_dir.y != 0
+            and abs(move_dir.y) >= abs(move_dir.x)
+        )
+
         # Small boots at the feet (wide, short) for more character.
         boot_w, boot_h = 18, 8
         boot_col = (35, 25, 20)
         boot_outline = (10, 10, 10)
         boot_highlight = (80, 60, 45)
-        for fx, fy in (left_foot, right_foot):
+
+        boot_face_dir = pygame.Vector2(0, 0)
+        if walking_vertical:
+            boot_face_dir = pygame.Vector2(0, -1)
+        elif keys_down and move_dir.length_squared() > 0 and move_dir.x != 0:
+            boot_face_dir = pygame.Vector2(1 if move_dir.x > 0 else -1, 0)
+        else:
+            look_x = float(player.facing.x)
+            if abs(look_x) >= 0.25:
+                boot_face_dir = pygame.Vector2(1 if look_x > 0 else -1, 0)
+            else:
+                boot_face_dir = pygame.Vector2(1, 0)
+
+        def draw_boot(fx: int, fy: int):
             boot = pygame.Rect(int(fx - boot_w / 2), int(fy - boot_h / 2), boot_w, boot_h)
             pygame.draw.rect(screen, boot_col, boot, border_radius=3)
             pygame.draw.rect(screen, boot_outline, boot, 2, border_radius=3)
-            pygame.draw.line(screen, boot_highlight, (boot.left + 2, boot.top + 2), (boot.right - 2, boot.top + 2), 2)
+
+            toe_len = max(4, int(boot_h * 0.9))
+            toe = None
+            if boot_face_dir.x > 0.1:
+                toe = pygame.Rect(boot.right - 2, boot.top + 1, toe_len, max(1, boot.height - 2))
+            elif boot_face_dir.x < -0.1:
+                toe = pygame.Rect(boot.left - toe_len + 2, boot.top + 1, toe_len, max(1, boot.height - 2))
+            elif boot_face_dir.y < -0.1:
+                toe = pygame.Rect(boot.left + 1, boot.top - toe_len + 2, max(1, boot.width - 2), toe_len)
+            elif boot_face_dir.y > 0.1:
+                toe = pygame.Rect(boot.left + 1, boot.bottom - 2, max(1, boot.width - 2), toe_len)
+
+            if toe is not None:
+                pygame.draw.rect(screen, boot_col, toe, border_radius=3)
+                pygame.draw.rect(screen, boot_outline, toe, 2, border_radius=3)
+
+            # Highlight on the "front" edge so the boot reads as facing a direction.
+            if boot_face_dir.x > 0.1:
+                pygame.draw.line(
+                    screen,
+                    boot_highlight,
+                    (boot.right - 2, boot.top + 2),
+                    (boot.right - 2, boot.bottom - 2),
+                    2,
+                )
+            elif boot_face_dir.x < -0.1:
+                pygame.draw.line(
+                    screen,
+                    boot_highlight,
+                    (boot.left + 2, boot.top + 2),
+                    (boot.left + 2, boot.bottom - 2),
+                    2,
+                )
+            elif boot_face_dir.y < -0.1:
+                pygame.draw.line(
+                    screen,
+                    boot_highlight,
+                    (boot.left + 2, boot.top + 2),
+                    (boot.right - 2, boot.top + 2),
+                    2,
+                )
+            else:
+                pygame.draw.line(
+                    screen,
+                    boot_highlight,
+                    (boot.left + 2, boot.bottom - 2),
+                    (boot.right - 2, boot.bottom - 2),
+                    2,
+                )
+
+        for fx, fy in (left_foot, right_foot):
+            draw_boot(int(fx), int(fy))
         attack_dir = (
             get_swing_dir(player.swing_base_dir, player.swing_timer, settings.PLAYER_SWING_TIME, player.facing)
             if player.swing_timer > 0
@@ -2488,16 +2580,6 @@ def draw_game(state: GameState):
         shoulder_y = body_rect.top + int(body_height * 0.2)
         arm_x_offset = body_width // 2 - 4  # keep close to torso without being flush
         arm_drop = settings.PLAYER_RADIUS * 0.05
-
-        move_dir = pygame.Vector2(0, 0)
-        if keys[pygame.K_w]:
-            move_dir.y -= 1
-        if keys[pygame.K_s]:
-            move_dir.y += 1
-        if keys[pygame.K_a]:
-            move_dir.x -= 1
-        if keys[pygame.K_d]:
-            move_dir.x += 1
 
         # Idle pose: arms hang down with ~30 deg outward angle, with light swing tied to legs
         rest_angle = math.radians(30)
@@ -2700,7 +2782,8 @@ def draw_game(state: GameState):
 
         if player_layer is not None:
             dur = max(0.001, settings.DODGE_DURATION)
-            phase = 1.0 - max(0.0, min(1.0, player.dodge_timer / dur))
+            t = 1.0 - max(0.0, min(1.0, player.dodge_timer / dur))
+            phase = 0.5 - 0.5 * math.cos(math.pi * t)
             roll_dir = pygame.Vector2(getattr(player, "dodge_dir", pygame.Vector2(0, 0)))
             if roll_dir.length_squared() == 0:
                 roll_dir = pygame.Vector2(getattr(player, "facing", pygame.Vector2(0, -1)))
@@ -2720,8 +2803,15 @@ def draw_game(state: GameState):
             tumble_deg = phase * 360.0 * spin_sign
             angle = (-face_deg) + tumble_deg
             rotated = pygame.transform.rotozoom(player_layer, angle, 1.0)
-            rect = rotated.get_rect(center=(int(p_screen.x), int(p_screen.y)))
-            screen_out.blit(rotated, rect)
+
+            knee_bend = math.sin(math.pi * t)
+            squash_x = 1.0 + 0.10 * knee_bend
+            squash_y = 1.0 - 0.22 * knee_bend
+            scaled_w = max(1, int(rotated.get_width() * squash_x))
+            scaled_h = max(1, int(rotated.get_height() * squash_y))
+            bent = pygame.transform.smoothscale(rotated, (scaled_w, scaled_h))
+            rect = bent.get_rect(center=(int(p_screen.x), int(p_screen.y + knee_bend * 6)))
+            screen_out.blit(bent, rect)
             screen = screen_out
 
     for coin in state.coin_pickups:
